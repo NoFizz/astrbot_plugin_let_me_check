@@ -1,0 +1,106 @@
+{
+  "group_chat": {
+    "description": "群聊转发分析",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用群聊转发分析",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，群聊中收到的合并转发消息将被自动分析并回复。"
+      },
+      "whitelist_enable": {
+        "description": "启用群聊白名单",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，仅对白名单中的群聊启用转发分析。白名单为空时默认对所有群聊生效。"
+      },
+      "whitelist": {
+        "description": "群聊白名单（UMO列表）",
+        "type": "list",
+        "default": [],
+        "hint": "填写需要启用转发分析的群聊UMO，格式如 aiocqhttp:GroupMessage:123456。白名单为空时对所有群聊生效。"
+      },
+      "reply_probability": {
+        "description": "群聊回复概率",
+        "type": "float",
+        "default": 1.0,
+        "hint": "收到转发消息后回复的概率，范围0.0-1.0。1.0表示总是回复，0.0表示从不回复。"
+      }
+    }
+  },
+  "private_chat": {
+    "description": "私聊转发分析",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用私聊转发分析",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，私聊中收到的合并转发消息将被自动分析并回复。"
+      },
+      "whitelist_enable": {
+        "description": "启用私聊白名单",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，仅对白名单中的私聊启用转发分析。白名单为空时默认对所有私聊生效。"
+      },
+      "whitelist": {
+        "description": "私聊白名单（UMO列表）",
+        "type": "list",
+        "default": [],
+        "hint": "填写需要启用转发分析的私聊UMO，格式如 aiocqhttp:FriendMessage:123456。白名单为空时对所有私聊生效。"
+      },
+      "reply_probability": {
+        "description": "私聊回复概率",
+        "type": "float",
+        "default": 1.0,
+        "hint": "收到转发消息后回复的概率，范围0.0-1.0。1.0表示总是回复，0.0表示从不回复。"
+      }
+    }
+  },
+  "max_messages": {
+    "description": "最大处理消息数",
+    "type": "int",
+    "default": 200,
+    "hint": "单次分析最多处理的聊天记录条数，超过此数量将截断。"
+  },
+  "parse_nested_forward": {
+    "description": "解析嵌套合并转发",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，会尝试解析合并转发中嵌套的其他合并转发消息。"
+  },
+  "max_nested_depth": {
+    "description": "最大嵌套深度",
+    "type": "int",
+    "default": 3,
+    "hint": "解析嵌套合并转发的最大深度，防止无限递归。"
+  },
+  "model_config": {
+    "description": "模型配置",
+    "type": "object",
+    "items": {
+      "provider_id": {
+        "description": "指定对话模型提供商（可选）",
+        "type": "string",
+        "default": "",
+        "hint": "留空则使用AstrBot当前默认对话模型。填写后使用指定的提供商。",
+        "_special": "select_provider"
+      },
+      "image_caption_provider_id": {
+        "description": "图片转述模型提供商（可选）",
+        "type": "string",
+        "default": "",
+        "hint": "留空则使用AstrBot配置的图片转述模型。填写后使用指定的提供商处理图片内容。",
+        "_special": "select_provider"
+      },
+      "image_caption_prompt": {
+        "description": "图片转述提示词",
+        "type": "text",
+        "default": "请用中文简短描述这张图片的内容。",
+        "hint": "发送给图片转述模型的提示词，用于控制图片描述的风格和详细程度。"
+      }
+    }
+  }
+}

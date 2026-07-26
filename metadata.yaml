@@ -1,0 +1,18 @@
+name: astrbot_plugin_smart_forward
+desc: 自动解析QQ合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用LLM生成自然回复，支持群聊/私聊独立开关与白名单控制。
+version: "1.0.0"
+author: NoFizz
+repo: https://github.com/NoFizz/astrbot_plugin_smart_forward
+tags:
+  - "工具"
+  - "LLM"
+  - "消息处理"
+  - "合并转发"
+  - "智能分析"
+license: "AGPL-3.0"
+python_version: ">=3.8"
+astrbot_version: ">=4.26.0"
+support_platforms:
+  - "aiocqhttp"
+display_name: "QQ群转发解析"
+short_desc: "收到QQ合并转发消息时，自动解析内容并结合上下文智能回复。"
