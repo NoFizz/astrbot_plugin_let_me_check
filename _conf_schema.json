@@ -20,12 +20,6 @@
         "type": "list",
         "default": [],
         "hint": "填写需要启用转发分析的群聊UMO，格式如 aiocqhttp:GroupMessage:123456。白名单为空时对所有群聊生效。"
-      },
-      "reply_probability": {
-        "description": "群聊回复概率",
-        "type": "float",
-        "default": 1.0,
-        "hint": "收到转发消息后回复的概率，范围0.0-1.0。1.0表示总是回复，0.0表示从不回复。"
       }
     }
   },
@@ -50,12 +44,6 @@
         "type": "list",
         "default": [],
         "hint": "填写需要启用转发分析的私聊UMO，格式如 aiocqhttp:FriendMessage:123456。白名单为空时对所有私聊生效。"
-      },
-      "reply_probability": {
-        "description": "私聊回复概率",
-        "type": "float",
-        "default": 1.0,
-        "hint": "收到转发消息后回复的概率，范围0.0-1.0。1.0表示总是回复，0.0表示从不回复。"
       }
     }
   },
@@ -85,14 +73,14 @@
         "description": "指定对话模型提供商（可选）",
         "type": "string",
         "default": "",
-        "hint": "留空则使用AstrBot当前默认对话模型。填写后使用指定的提供商。",
+        "hint": "留空则使用当前配置文件中的“默认对话模型”。填写后使用指定的提供商。",
         "_special": "select_provider"
       },
       "image_caption_provider_id": {
         "description": "图片转述模型提供商（可选）",
         "type": "string",
         "default": "",
-        "hint": "留空则使用AstrBot配置的图片转述模型。填写后使用指定的提供商处理图片内容。",
+        "hint": "留空则依次使用当前配置文件中的“默认图片转述模型”→“群聊图片转述模型”→“默认对话模型”。填写后使用指定的提供商处理图片内容。",
         "_special": "select_provider"
       },
       "image_caption_prompt": {
@@ -100,6 +88,20 @@
         "type": "text",
         "default": "请用中文简短描述这张图片的内容。",
         "hint": "发送给图片转述模型的提示词，用于控制图片描述的风格和详细程度。"
+      },
+      "reply_mode": {
+        "description": "回复模式",
+        "type": "string",
+        "default": "inject_only",
+        "options": ["inject_only", "proactive_only"],
+        "labels": ["注入主管道（推荐）", "主动发送回复"],
+        "hint": "inject_only: 将转发内容注入主管道LLM请求，用户@机器人时由主管道结合上下文统一回复; proactive_only: 收到转发后插件立即独立调用LLM并发送回复"
+      },
+      "image_caption_concurrency": {
+        "description": "图片转述并发数",
+        "type": "int",
+        "default": 5,
+        "hint": "同时调用图片转述模型的最大并发数。"
       }
     }
   }
