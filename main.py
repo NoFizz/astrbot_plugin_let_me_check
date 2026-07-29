@@ -1,5 +1,5 @@
 """
-QQ群转发解析 v1.0.0 - AstrBot 合并转发消息智能分析插件
+让我康康 v1.0.1 - AstrBot 合并转发消息智能分析插件
 
 功能：
 - 自动解析QQ合并转发消息内容（支持嵌套转发）
@@ -9,7 +9,7 @@ QQ群转发解析 v1.0.0 - AstrBot 合并转发消息智能分析插件
 - 回复概率可配置（0.0-1.0）
 
 作者: NoFizz
-版本: 1.0.0
+版本: 1.0.1
 许可证: AGPL-3.0
 """
 
@@ -37,11 +37,11 @@ except ImportError:
 
 
 @register(
-    "smart_forward",
+    "let_me_check",
     "NoFizz",
     "智能分析QQ合并转发消息，支持群聊/私聊独立开关与白名单，结合会话上下文自动回复",
-    "1.0.0",
-    "https://github.com/NoFizz/astrbot_plugin_smart_forward"
+    "1.0.1",
+    "https://github.com/NoFizz/astrbot_plugin_let_me_check"
 )
 class SmartForward(Star):
     """智能合并转发消息分析插件"""

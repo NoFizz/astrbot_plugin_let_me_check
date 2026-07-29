@@ -1,7 +1,11 @@
-# astrbot_plugin_smart_forward
+<h1 align="center">让我康康/astrbot_plugin_let_me_check</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version">
+  <img src="./logo.png" alt="让我康康 Logo" width="128" height="128">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.1-blue" alt="version">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="license">
   <img src="https://img.shields.io/badge/AstrBot->=4.26.0-orange" alt="AstrBot version">
   <img src="https://img.shields.io/badge/platform-aiocqhttp-lightgrey" alt="platform">
@@ -21,22 +25,31 @@
 
 ## 安装
 
-### 方法一：通过 AstrBot WebUI 安装（推荐）
+### 方法一：通过插件市场安装（推荐）
+
+1. 打开 AstrBot WebUI → 插件管理 → 插件市场。
+2. 添加插件源（如尚未添加）：
+   - 源名称：`AstrBot Official Plugin Market`
+   - 源地址：`https://cloud-test.astrbot.app/api/v1/market/plugins.json`
+3. 在插件市场中搜索 **让我康康**（`astrbot_plugin_let_me_check`），点击安装。
+4. 等待安装完成，确认插件已启用。
+
+### 方法二：从 GitHub 安装
 
 1. 打开 AstrBot WebUI → 插件管理 → 新增插件。
 2. 选择 **从 GitHub 安装**。
 3. 填入仓库地址：
    ```
-   https://github.com/NoFizz/astrbot_plugin_smart_forward
+   https://github.com/NoFizz/astrbot_plugin_let_me_check
    ```
 4. 等待安装完成，确认插件已启用。
 
-### 方法二：手动安装
+### 方法三：手动安装
 
 1. 将本仓库克隆或下载到 AstrBot 的插件目录：
    ```bash
    cd AstrBot/data/plugins
-   git clone https://github.com/NoFizz/astrbot_plugin_smart_forward.git
+   git clone https://github.com/NoFizz/astrbot_plugin_let_me_check.git
    ```
 2. 在 AstrBot WebUI 中重载插件，或重启 AstrBot。
 
@@ -124,4 +137,4 @@
 
 **NoFizz** · [GitHub](https://github.com/NoFizz)
 
-如遇问题或有功能建议，欢迎提交 [Issue](https://github.com/NoFizz/astrbot_plugin_smart_forward/issues)。
+如遇问题或有功能建议，欢迎提交 [Issue](https://github.com/NoFizz/astrbot_plugin_let_me_check/issues)。
