@@ -42,7 +42,7 @@ class HistoryManager:
             # 优先使用原子 API
             if hasattr(cm, "add_message_pair") and assistant_text:
                 await self._write_via_add_message_pair(
-                    cm, cid, user_text, assistant_text
+                    cm, umo, cid, user_text, assistant_text
                 )
             else:
                 await self._write_via_update_conversation(
@@ -53,7 +53,7 @@ class HistoryManager:
             logger.error(f"[SmartForward] 写入会话历史失败: {type(e).__name__}: {e}")
 
     async def _write_via_add_message_pair(
-        self, cm, cid: str, user_text: str, assistant_text: str
+        self, cm, umo: str, cid: str, user_text: str, assistant_text: str
     ) -> None:
         """使用 add_message_pair 原子写入（推荐路径）"""
         try:
@@ -71,11 +71,10 @@ class HistoryManager:
                 cid=cid, user_message=user_msg, assistant_message=assistant_msg
             )
         except ImportError:
-            # 消息类型不可用时回退
+            # 消息类型不可用时回退（传入调用方的 umo，避免依赖私有属性）
             logger.warning(
                 "[SmartForward] agent.message 不可用，回退到 update_conversation"
             )
-            umo = getattr(cm, "_current_umo", "")
             await self._write_via_update_conversation(
                 cm, umo, cid, user_text, assistant_text
             )

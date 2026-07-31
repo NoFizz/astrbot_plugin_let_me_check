@@ -1,5 +1,5 @@
 """
-让我康康 v2.0.0 - AstrBot 合并转发消息智能分析插件
+让我康康 v2.0.1 - AstrBot 合并转发消息智能分析插件
 
 功能：
 - 自动解析QQ合并转发消息内容（支持嵌套转发）
@@ -9,7 +9,7 @@
 - 回复模式可选：注入主管道 / 主动回复
 
 作者: NoFizz
-版本: 2.0.0
+版本: 2.0.1
 许可证: AGPL-3.0
 """
 
@@ -43,7 +43,7 @@ except ImportError:
     "let_me_check",
     "NoFizz",
     "智能分析QQ合并转发消息，支持群聊/私聊独立开关与白名单，结合会话上下文自动回复",
-    "2.0.0",
+    "2.0.1",
     "https://github.com/NoFizz/astrbot_plugin_let_me_check",
 )
 class SmartForward(Star):
@@ -105,7 +105,8 @@ class SmartForward(Star):
         except asyncio.TimeoutError:
             logger.warning("[SmartForward] 等待转发处理超时，主管道继续执行")
 
-        # 注入转发内容
+        # 注入转发内容（mark_as_temp 防止主管道二次持久化，
+        # 转发内容已由插件通过 write_forward_pair 写入会话历史）
         result_entry = self._forward_results.pop(umo, None)
         if result_entry:
             result_text, _ = result_entry
@@ -114,7 +115,7 @@ class SmartForward(Star):
             req.extra_user_content_parts.append(
                 TextPart(
                     text=f"<forwarded_message_context>\n{result_text}\n</forwarded_message_context>"
-                )
+                ).mark_as_temp()
             )
             logger.info("[SmartForward] 已将转发内容注入主管道请求")
 
@@ -148,6 +149,13 @@ class SmartForward(Star):
             return
 
         # per-UMO 并发保护：同一会话同时只处理一条转发
+        # 先检查已注册的未完成 Event（同步段，无调度窗口竞态）：
+        # 若仅依赖 lock.locked()，相邻两条消息可能因 create_task 调度延迟
+        # 而双双通过检查，导致 _processing_events[umo] 被覆盖、前一条结果丢失。
+        existing = self._processing_events.get(umo)
+        if existing is not None and not existing.is_set():
+            logger.info("[SmartForward] 该会话正在处理另一条转发，跳过")
+            return
         lock = self._umo_locks.setdefault(umo, asyncio.Lock())
         if lock.locked():
             logger.info("[SmartForward] 该会话正在处理另一条转发，跳过")
@@ -158,9 +166,7 @@ class SmartForward(Star):
         self._processing_events[umo] = proc_event
 
         task = asyncio.create_task(
-            self._process_forward(
-                event, detect_result, umo, is_group, proc_event, lock
-            )
+            self._process_forward(event, detect_result, umo, is_group, proc_event, lock)
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)

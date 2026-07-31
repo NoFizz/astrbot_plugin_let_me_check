@@ -63,7 +63,9 @@ class LLMService:
         # 2. 全局默认配置（“默认图片转述模型”）
         # 注意：必须传 umo 获取会话对应的配置文件，而非默认配置
         try:
-            session_cfg = self._context.get_config(umo=umo) if umo else self._context.get_config()
+            session_cfg = (
+                self._context.get_config(umo=umo) if umo else self._context.get_config()
+            )
         except Exception:
             session_cfg = self._context.get_config()
         caption_id = session_cfg.get("provider_settings", {}).get(
