@@ -15,7 +15,6 @@ venv/
 
 # Testing
 .pytest_cache/
-tests/
 
 # Developer docs
 AGENTS.md
