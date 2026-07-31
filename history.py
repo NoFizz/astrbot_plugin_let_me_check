@@ -90,9 +90,13 @@ class HistoryManager:
 
         msgs = []
         try:
-            parsed = json.loads(conv.history) if getattr(conv, "history", "") else []
-            if isinstance(parsed, list):
-                msgs = parsed
+            history = getattr(conv, "history", "")
+            if isinstance(history, list):
+                msgs = history
+            elif isinstance(history, str) and history:
+                parsed = json.loads(history)
+                if isinstance(parsed, list):
+                    msgs = parsed
         except Exception:
             msgs = []
 
