@@ -24,6 +24,9 @@ class LLMService:
         self._caption_concurrency = max(
             1, int(model_config.get("image_caption_concurrency", 5))
         )
+        self._image_caption_enabled = bool(
+            model_config.get("image_caption_enabled", True)
+        )
 
     # ─── 提供商获取 ─────────────────────────────────────────────
 
@@ -112,6 +115,10 @@ class LLMService:
         """
         if not urls:
             return []
+
+        if not self._image_caption_enabled:
+            logger.info("[SmartForward] 图片转述已关闭，使用占位符")
+            return ["(图片)"] * len(urls)
 
         provider = self._get_caption_provider(umo)
         if not provider:
