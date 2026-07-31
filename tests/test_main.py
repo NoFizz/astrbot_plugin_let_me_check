@@ -182,6 +182,25 @@ def test_multiple_forwards_merged_in_order(make_event):
     asyncio.run(scenario())
 
 
+def test_disabled_chat_pure_forward_not_swallowed(make_event):
+    """私聊禁用时：纯转发在 on_llm_request 中不被吞掉（插件不生效）。"""
+    plugin = make_plugin()
+    plugin.private_chat = {"enable": False, "whitelist_enable": False, "whitelist": []}
+
+    async def scenario():
+        event = make_event(
+            segments=[Forward(id="fwd-1")],
+            umo="aiocqhttp:PrivateMessage:123456",
+            group_id=None,
+        )
+        req = ProviderRequest()
+        await plugin.on_llm_request(event, req)
+        assert event._stopped is False
+        assert plugin._pending == {}
+
+    asyncio.run(scenario())
+
+
 def test_trigger_without_pending_no_injection(make_event):
     """无暂存时触发：不注入、不吞调用（主管道正常处理用户消息）。"""
     plugin = make_plugin()

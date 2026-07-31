@@ -96,6 +96,10 @@ class SmartForward(Star):
             return
 
         umo = event.unified_msg_origin
+        is_group = bool(event.get_group_id())
+
+        if not self._is_enabled_for_chat(umo, is_group):
+            return
 
         # 纯转发：中止本次 LLM 调用，转发已由 on_message 入队
         if self._is_pure_forward(event):
