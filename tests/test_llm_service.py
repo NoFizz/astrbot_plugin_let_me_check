@@ -89,42 +89,6 @@ def test_caption_provider_falls_back_to_using_provider():
     assert svc._get_caption_provider("umo-x") is provider
 
 
-def test_generate_reply_uses_llm_generate():
-    async def llm_generate(chat_provider_id=None, prompt=""):
-        return SimpleNamespace(completion_text="回复内容")
-
-    async def get_current_chat_provider_id(umo=None):
-        return "prov-1"
-
-    context = SimpleNamespace(
-        llm_generate=llm_generate,
-        get_current_chat_provider_id=get_current_chat_provider_id,
-    )
-    svc = LLMService(context, {})
-    result = asyncio.run(svc.generate_reply("prompt", "umo"))
-    assert result == "回复内容"
-
-
-def test_generate_reply_falls_back_to_text_chat():
-    provider = FakeProvider(response_text="兜底回复")
-
-    class _BrokenLLM:
-        pass
-
-    async def get_current_chat_provider_id(umo=None):
-        return "prov-1"
-
-    context = SimpleNamespace(
-        llm_generate=_BrokenLLM,  # hasattr passes, but calling raises TypeError
-        get_current_chat_provider_id=get_current_chat_provider_id,
-        get_provider_by_id=lambda pid: provider,
-        get_using_provider=lambda umo=None: provider,
-    )
-    svc = LLMService(context, {})
-    result = asyncio.run(svc.generate_reply("prompt", "umo"))
-    assert result == "兜底回复"
-
-
 def test_describe_images_disabled_returns_placeholder_without_provider_call():
     """image_caption_enabled=False 时：返回占位符，且不调用任何模型。"""
     provider = FakeProvider()

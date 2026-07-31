@@ -3,7 +3,6 @@
 
 负责：
 - 图片转述（多模态模型调用，URL 去重，并发控制）
-- 回复生成（使用 context.llm_generate 现代 API）
 - Token 预算感知的 prompt 构建
 """
 
@@ -148,78 +147,6 @@ class LLMService:
 
         # 按原始顺序映射结果
         return [caption_map.get(url, "(图片)") for url in urls]
-
-    # ─── 回复生成 ─────────────────────────────────────────────
-
-    async def generate_reply(self, prompt: str, umo: str) -> str | None:
-        """调用 LLM 生成回复。
-
-        优先使用 context.llm_generate()（尊重 persona/system_prompt），
-        回退到 provider.text_chat()。
-        """
-        # 尝试使用现代 API
-        try:
-            provider_id = self._model_config.get("provider_id", "").strip()
-            if not provider_id:
-                provider_id = await self._context.get_current_chat_provider_id(umo=umo)
-
-            if provider_id and hasattr(self._context, "llm_generate"):
-                resp = await asyncio.wait_for(
-                    self._context.llm_generate(
-                        chat_provider_id=provider_id, prompt=prompt
-                    ),
-                    timeout=60,
-                )
-                if resp and resp.completion_text:
-                    return resp.completion_text
-        except Exception as e:
-            logger.warning(
-                f"[SmartForward] llm_generate 调用失败，回退到 text_chat: {e}"
-            )
-
-        # 回退路径
-        provider = self._get_chat_provider(umo)
-        if not provider:
-            logger.error("[SmartForward] 未找到可用的LLM提供商")
-            return None
-
-        try:
-            response = await asyncio.wait_for(
-                provider.text_chat(prompt=prompt), timeout=60
-            )
-            if response and response.completion_text:
-                return response.completion_text
-        except Exception as e:
-            logger.error(f"[SmartForward] LLM 调用失败: {type(e).__name__}: {e}")
-
-        return None
-
-    # ─── Prompt 构建 ─────────────────────────────────────────────
-
-    def build_prompt(
-        self,
-        messages: list[ParsedMessage],
-        image_descriptions: list[str],
-        sender_name: str,
-        is_group: bool,
-        group_id: str = "",
-    ) -> str:
-        """构建 LLM 提示词（内容已由 max_messages 限制）"""
-        chat_type = "群聊" if is_group else "私聊"
-        group_info = f"，来自群组 {group_id}" if is_group else ""
-
-        chat_lines = self._build_chat_lines(messages, image_descriptions)
-        chat_content = "\n".join(chat_lines)
-
-        prompt = (
-            f"你正在帮用户分析一条{chat_type}中的合并转发消息。"
-            f"这条消息由 {sender_name} 转发{group_info}。"
-            f"转发消息中包含以下聊天记录：\n\n"
-            f"{chat_content}\n\n"
-            f"请根据以上转发的聊天记录内容，给出自然、口语化的分析或总结。"
-            f"像朋友之间聊天一样随意，不要加'根据聊天记录'之类的前缀。"
-        )
-        return prompt
 
     def build_user_message_text(
         self,

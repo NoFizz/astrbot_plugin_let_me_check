@@ -98,15 +98,6 @@ class AstrMessageEvent:
         self.platform = platform
 
 
-class MessageChain:
-    def __init__(self):
-        self.segments = []
-
-    def message(self, text):
-        self.segments.append(("text", text))
-        return self
-
-
 class _Filter:
     EventMessageType = EventMessageType
 
@@ -126,7 +117,6 @@ class _Filter:
 _leaf_module(
     "astrbot.api.event",
     AstrMessageEvent=AstrMessageEvent,
-    MessageChain=MessageChain,
     filter=_Filter(),
     EventMessageType=EventMessageType,
 )

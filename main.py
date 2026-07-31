@@ -24,7 +24,7 @@ from astrbot.api.star import Context, Star, register
 
 from .history import HistoryManager
 from .llm_service import LLMService
-from .models import ParsedMessage, ProcessingResult
+from .models import ForwardDetectResult, ParsedMessage, ProcessingResult
 from .parser import detect_forward, extract_messages
 
 # 平台适配检查
@@ -70,7 +70,9 @@ class SmartForward(Star):
         self._dedup_max_size = 1024
 
         # 按需解析暂存队列: umo -> [(event, detect_result, timestamp)]
-        self._pending: dict[str, list] = {}
+        self._pending: dict[
+            str, list[tuple[AstrMessageEvent, ForwardDetectResult, float]]
+        ] = {}
 
     def _load_config(self):
         """加载配置项"""
@@ -224,20 +226,28 @@ class SmartForward(Star):
         all_image_urls: list[str] = []
         any_success = False
 
-        for entry_event, detect_result, _ in pending:
-            try:
-                result: ProcessingResult = await asyncio.wait_for(
-                    extract_messages(
-                        entry_event,
-                        detect_result,
-                        max_messages=self.max_messages,
-                        parse_nested=self.parse_nested_forward,
-                        max_depth=self.max_nested_depth,
-                    ),
-                    timeout=_EXTRACT_TIMEOUT,
+        tasks = [
+            asyncio.wait_for(
+                extract_messages(
+                    entry_event,
+                    detect_result,
+                    max_messages=self.max_messages,
+                    parse_nested=self.parse_nested_forward,
+                    max_depth=self.max_nested_depth,
+                ),
+                timeout=_EXTRACT_TIMEOUT,
+            )
+            for entry_event, detect_result, _ in pending
+        ]
+        results: list[ProcessingResult | BaseException] = await asyncio.gather(
+            *tasks, return_exceptions=True
+        )
+
+        for (_, detect_result, _), result in zip(pending, results):
+            if isinstance(result, Exception):
+                logger.error(
+                    f"[SmartForward] 解析转发失败: {type(result).__name__}: {result}"
                 )
-            except Exception as e:
-                logger.error(f"[SmartForward] 解析转发失败: {type(e).__name__}: {e}")
                 self._remove_dedup(detect_result.forward_id, umo)
                 continue
             if not result.messages:
@@ -263,8 +273,8 @@ class SmartForward(Star):
                     self._llm.describe_images(all_image_urls, caption_prompt, umo=umo),
                     timeout=_CAPTION_TIMEOUT,
                 )
-            except asyncio.TimeoutError:
-                logger.error("[SmartForward] 图片转述超时")
+            except Exception as e:
+                logger.error(f"[SmartForward] 图片转述失败: {type(e).__name__}: {e}")
                 image_descriptions = ["(图片)"] * len(all_image_urls)
 
         # 合并构建用户消息文本（多条转发合并为一段）
@@ -322,4 +332,5 @@ class SmartForward(Star):
     async def terminate(self):
         """插件终止时资源释放"""
         self._pending.clear()
+        self._dedup_cache.clear()
         logger.info("[SmartForward] 插件已停止")
