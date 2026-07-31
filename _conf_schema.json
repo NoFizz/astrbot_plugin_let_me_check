@@ -89,13 +89,11 @@
         "default": "请用中文简短描述这张图片的内容。",
         "hint": "发送给图片转述模型的提示词，用于控制图片描述的风格和详细程度。"
       },
-      "reply_mode": {
-        "description": "回复模式",
-        "type": "string",
-        "default": "inject_only",
-        "options": ["inject_only", "proactive_only"],
-        "labels": ["注入主管道（推荐）", "主动发送回复"],
-        "hint": "inject_only: 将转发内容注入主管道LLM请求，用户@机器人时由主管道结合上下文统一回复; proactive_only: 收到转发后插件立即独立调用LLM并发送回复"
+      "image_caption_enabled": {
+        "description": "启用图片转述",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，转发消息中的图片将调用图片转述模型生成文字描述；关闭后图片仅显示为占位符，不调用任何模型。"
       },
       "image_caption_concurrency": {
         "description": "图片转述并发数",

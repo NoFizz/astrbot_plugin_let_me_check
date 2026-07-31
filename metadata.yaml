@@ -1,6 +1,6 @@
 name: astrbot_plugin_let_me_check
 desc: 自动解析QQ合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用LLM生成自然回复，支持群聊/私聊独立开关与白名单控制。
-version: "2.0.1"
+version: "2.1.0"
 author: NoFizz
 repo: https://github.com/NoFizz/astrbot_plugin_let_me_check
 tags:
