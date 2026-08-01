@@ -4,9 +4,11 @@ import asyncio
 import time
 from types import SimpleNamespace
 
+from astrbot_plugin_let_me_check.main import SmartForward
+from astrbot_plugin_let_me_check.parser import detect_forward
+
 from astrbot.api.message_components import Forward, Text
 from astrbot.api.provider import ProviderRequest
-from astrbot_plugin_let_me_check.main import SmartForward
 
 
 def make_plugin():
@@ -71,7 +73,7 @@ def test_on_message_stages_without_parsing(make_event):
         staged_event, detect_result, ts = queue[0]
         assert detect_result.forward_id == "fwd-1"
         assert staged_event is event
-        assert ts <= time.time()
+        assert ts <= time.monotonic()
 
     asyncio.run(scenario())
 
@@ -114,7 +116,7 @@ def test_pending_ttl_expired_cleaned(make_event):
         event = make_event(segments=[Forward(id="fwd-old")], umo=umo)
         await plugin.on_message(event)
         # 手动伪造过期时间戳（90000s > 86400s TTL）
-        plugin._pending[umo][0] = (event, plugin._pending[umo][0][1], time.time() - 90000)
+        plugin._pending[umo][0] = (event, plugin._pending[umo][0][1], time.monotonic() - 90000)
         plugin._cleanup_expired_pending(umo)
         assert umo not in plugin._pending
 
@@ -211,5 +213,42 @@ def test_trigger_without_pending_no_injection(make_event):
         await plugin.on_llm_request(trigger, req)
         assert req.extra_user_content_parts == []
         assert trigger._stopped is False
+
+    asyncio.run(scenario())
+
+
+def test_process_pending_handles_cancelled_error_result(make_event):
+    """gather(return_exceptions=True) 可能返回 CancelledError（BaseException 子类），
+    必须以 BaseException 判断，避免访问 result.messages 时抛 AttributeError。"""
+    plugin = make_plugin()
+
+    class _CancelledBot:
+        def __init__(self):
+            self.api = self
+
+        async def call_action(self, action, **params):
+            raise asyncio.CancelledError()
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        event = make_event(segments=[Forward(id="fwd-cancel")], umo=umo)
+        event.bot = _CancelledBot()
+        detect_result = detect_forward(event)
+        assert detect_result is not None
+        result = await plugin._process_pending(
+            umo, [(event, detect_result, time.monotonic())]
+        )
+        assert result is None
+
+    asyncio.run(scenario())
+
+
+def test_process_pending_empty_returns_none():
+    """空暂存列表：_process_pending 直接返回 None（不抛 IndexError）。"""
+    plugin = make_plugin()
+
+    async def scenario():
+        result = await plugin._process_pending("umo", [])
+        assert result is None
 
     asyncio.run(scenario())

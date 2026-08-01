@@ -1,5 +1,5 @@
 """
-让我康康 v2.1.0 - AstrBot 合并转发消息智能分析插件
+让我康康 v2.2.0 - AstrBot 合并转发消息智能分析插件
 
 功能：
 - 按需解析：收到合并转发消息仅暂存（零 Token 消耗），LLM 触发时统一解析注入
@@ -8,7 +8,7 @@
 - 群聊/私聊独立开关与白名单控制
 
 作者: NoFizz
-版本: 2.1.0
+版本: 2.2.0
 许可证: AGPL-3.0
 """
 
@@ -24,7 +24,12 @@ from astrbot.api.star import Context, Star, register
 
 from .history import HistoryManager
 from .llm_service import LLMService
-from .models import ForwardDetectResult, ParsedMessage, ProcessingResult
+from .models import (
+    DEFAULT_IMAGE_CAPTION_PROMPT,
+    ForwardDetectResult,
+    ParsedMessage,
+    ProcessingResult,
+)
 from .parser import detect_forward, extract_messages
 
 # 平台适配检查
@@ -49,7 +54,7 @@ _CAPTION_TIMEOUT = 120  # 图片转述超时
     "let_me_check",
     "NoFizz",
     "智能分析QQ合并转发消息，支持群聊/私聊独立开关与白名单，按需解析注入会话上下文",
-    "2.1.0",
+    "2.2.0",
     "https://github.com/NoFizz/astrbot_plugin_let_me_check",
 )
 class SmartForward(Star):
@@ -171,7 +176,7 @@ class SmartForward(Star):
         """将转发暂存到会话队列，超限时淘汰最旧条目（FIFO）"""
         self._cleanup_expired_pending(umo)
         queue = self._pending.setdefault(umo, [])
-        queue.append((event, detect_result, time.time()))
+        queue.append((event, detect_result, time.monotonic()))
         if len(queue) > _PENDING_MAX:
             dropped = queue.pop(0)
             self._remove_dedup(dropped[1].forward_id, umo)
@@ -184,7 +189,7 @@ class SmartForward(Star):
         queue = self._pending.get(umo)
         if not queue:
             return
-        now = time.time()
+        now = time.monotonic()
         expired = [i for i, (_, _, ts) in enumerate(queue) if now - ts > _PENDING_TTL]
         for i in reversed(expired):
             self._remove_dedup(queue[i][1].forward_id, umo)
@@ -222,6 +227,9 @@ class SmartForward(Star):
         Returns:
             合并后的用户消息文本，全部失败时返回 None
         """
+        if not pending:
+            return None
+
         all_messages: list[ParsedMessage] = []
         all_image_urls: list[str] = []
         any_success = False
@@ -244,7 +252,9 @@ class SmartForward(Star):
         )
 
         for (_, detect_result, _), result in zip(pending, results):
-            if isinstance(result, Exception):
+            # 注意：gather(return_exceptions=True) 可能返回 BaseException 子类
+            # （如 CancelledError），其并非 Exception 子类，必须用 BaseException 判断
+            if isinstance(result, BaseException):
                 logger.error(
                     f"[SmartForward] 解析转发失败: {type(result).__name__}: {result}"
                 )
@@ -266,7 +276,7 @@ class SmartForward(Star):
         if all_image_urls:
             caption_prompt = (
                 self.model_config.get("image_caption_prompt", "").strip()
-                or "请用中文简短描述这张图片的内容。"
+                or DEFAULT_IMAGE_CAPTION_PROMPT
             )
             try:
                 image_descriptions = await asyncio.wait_for(
@@ -302,7 +312,7 @@ class SmartForward(Star):
         """检查消息是否已处理过"""
         content = f"{forward_id}:{umo}"
         msg_hash = hashlib.md5(content.encode()).hexdigest()
-        now = time.time()
+        now = time.monotonic()
 
         if msg_hash in self._dedup_cache:
             if now < self._dedup_cache[msg_hash]:
