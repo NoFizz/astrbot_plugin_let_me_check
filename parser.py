@@ -18,7 +18,21 @@ from typing import Any
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 
-from .models import ForwardDetectResult, ForwardSource, ParsedMessage, ProcessingResult
+from .models import (
+    FILE_PLACEHOLDER,
+    IMAGE_NO_URL_PLACEHOLDER,
+    IMAGE_PLACEHOLDER,
+    VIDEO_PLACEHOLDER,
+    ForwardDetectResult,
+    ForwardSource,
+    ParsedMessage,
+    ProcessingResult,
+)
+
+# 单次 get_forward_msg 协议调用超时（秒），与 main.py 外层 _EXTRACT_TIMEOUT 分层
+_GET_FORWARD_TIMEOUT = 30
+# 嵌套转发并行获取并发上限，防止对协议端造成瞬时压力
+_NESTED_FETCH_CONCURRENCY = 8
 
 
 def detect_forward(event) -> ForwardDetectResult | None:
@@ -155,8 +169,9 @@ async def _resolve_raw_messages(
 
     client = event.bot
     try:
-        forward_data = await client.api.call_action(
-            "get_forward_msg", id=detect_result.forward_id
+        forward_data = await asyncio.wait_for(
+            client.api.call_action("get_forward_msg", id=detect_result.forward_id),
+            timeout=_GET_FORWARD_TIMEOUT,
         )
         return _extract_messages_from_forward_data(forward_data)
     except Exception as e:
@@ -171,6 +186,7 @@ async def _parse_nodes(
     parse_nested: bool,
     max_depth: int,
     current_depth: int,
+    _semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[list[ParsedMessage], list[str]]:
     """解析消息节点列表，返回 (ParsedMessage 列表, 扁平化图片 URL 列表)"""
     if current_depth > max_depth:
@@ -190,7 +206,6 @@ async def _parse_nodes(
         sender_name = _extract_sender_name(node)
         content_chain = _extract_content_chain(node)
         text_parts: list[str] = []
-        has_image = False
         has_video = False
         image_count = 0
         node_image_urls: list[str] = []
@@ -213,17 +228,16 @@ async def _parse_nodes(
                 elif seg_type == "image":
                     url = _extract_image_url(seg_data)
                     if url:
-                        has_image = True
                         image_count += 1
                         node_image_urls.append(url)
-                        text_parts.append("[图片]")
+                        text_parts.append(IMAGE_PLACEHOLDER)
                     else:
-                        text_parts.append("[图片:链接缺失]")
+                        text_parts.append(IMAGE_NO_URL_PLACEHOLDER)
                 elif seg_type == "video":
                     has_video = True
-                    text_parts.append("[视频]")
+                    text_parts.append(VIDEO_PLACEHOLDER)
                 elif seg_type == "file":
-                    text_parts.append("[文件]")
+                    text_parts.append(FILE_PLACEHOLDER)
                 elif (
                     seg_type == "forward" and parse_nested and current_depth < max_depth
                 ):
@@ -232,12 +246,11 @@ async def _parse_nodes(
                         nested_tasks.append((len(contexts), nested_id))
 
         content = "".join(text_parts).strip()
-        if content or has_image or has_video:
+        if content or image_count > 0 or has_video:
             contexts.append(
                 ParsedMessage(
                     sender=sender_name,
                     content=content,
-                    has_image=has_image,
                     image_count=image_count,
                     image_urls=node_image_urls,
                     has_video=has_video,
@@ -249,6 +262,9 @@ async def _parse_nodes(
     if nested_tasks:
         remaining = max_messages - message_count
         if remaining > 0:
+            # 整棵解析树共享同一信号量，全局约束并发协议获取次数
+            if _semaphore is None:
+                _semaphore = asyncio.Semaphore(_NESTED_FETCH_CONCURRENCY)
             # 并行获取所有嵌套转发
             nested_results = await asyncio.gather(
                 *[
@@ -259,6 +275,7 @@ async def _parse_nodes(
                         parse_nested,
                         max_depth,
                         current_depth + 1,
+                        _semaphore,
                     )
                     for _, nid in nested_tasks
                 ],
@@ -294,16 +311,18 @@ async def _resolve_nested(
     parse_nested: bool,
     max_depth: int,
     depth: int,
+    _semaphore: asyncio.Semaphore,
 ) -> tuple[list[ParsedMessage], list[str]]:
     """解析单个嵌套转发"""
     nested_detect = ForwardDetectResult(
         forward_id=nested_id, forward_payload=None, source=ForwardSource.COMPONENT
     )
-    raw_msgs = await _resolve_raw_messages(event, nested_detect)
+    async with _semaphore:
+        raw_msgs = await _resolve_raw_messages(event, nested_detect)
     if not raw_msgs:
         return [], []
     return await _parse_nodes(
-        event, raw_msgs, max_messages, parse_nested, max_depth, depth
+        event, raw_msgs, max_messages, parse_nested, max_depth, depth, _semaphore
     )
 
 

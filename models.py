@@ -7,6 +7,16 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+# ── 占位符与默认提示词常量 ─────────────────────────────────────
+# parser.py 生成、llm_service.py 消费（替换图片描述），必须保持同步。
+
+IMAGE_PLACEHOLDER = "[图片]"
+IMAGE_NO_URL_PLACEHOLDER = "[图片:链接缺失]"
+VIDEO_PLACEHOLDER = "[视频]"
+FILE_PLACEHOLDER = "[文件]"
+
+DEFAULT_IMAGE_CAPTION_PROMPT = "请用中文简短描述这张图片的内容。"
+
 
 class ForwardSource(Enum):
     """转发消息的检测来源"""
@@ -22,7 +32,6 @@ class ParsedMessage:
 
     sender: str
     content: str
-    has_image: bool = False
     image_count: int = 0
     image_urls: list[str] = field(default_factory=list)
     has_video: bool = False
