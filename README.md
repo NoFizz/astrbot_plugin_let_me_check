@@ -1,8 +1,7 @@
-<h1>astrbot_plugin_let_me_check/让我康康</h1>
+<h1 align="center">让我康康/astrbot_plugin_let_me_check</h1>
 
 <p align="center">
-  <img src="./logo.png" alt="让我康康 Logo" width="128" height="128" style="vertical-align: middle">
-  <img src="https://count.getloli.com/@astrbot_plugin_let_me_check?theme=moebooru" alt="Moe Counter" style="vertical-align: middle">
+  <img src="./logo.png" alt="让我康康 Logo" width="128" height="128">
 </p>
 
 <p align="center">
@@ -13,6 +12,10 @@
 </p>
 
 自动解析 QQ 合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用 LLM 生成自然回复，支持群聊/私聊独立开关与白名单控制。
+
+<p align="center">
+  <img src="https://count.getloli.com/@astrbot_plugin_let_me_check?theme=moebooru" alt="Moe Counter">
+</p>
 
 ## 功能特性
 
