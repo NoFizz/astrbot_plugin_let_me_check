@@ -67,22 +67,22 @@ class LLMService:
             return True
         return "image" in modalities
 
-    def _get_caption_provider(self, umo: str = "") -> Provider | None:
-        """获取图片转述模型提供商。
+    def _resolve_caption_provider(self, umo: str = "") -> tuple[Provider | None, int]:
+        """按回退链解析图片转述模型，返回 (provider, level)。
 
-        查找顺序：
-        1. 插件配置的 image_caption_provider_id
-        2. 全局配置 provider_settings.default_image_caption_provider_id
-        3. 当前会话的对话模型（仅当支持图片输入，modalities 含 image 或未配置）
-        4. 会话级配置 provider_ltm_settings.image_caption_provider_id（最终兜底）
-           若仍未配置，记录 error 日志并返回 None
+        level 含义：
+        1 = 插件配置 image_caption_provider_id
+        2 = 全局配置 provider_settings.default_image_caption_provider_id
+        3 = 当前对话模型（仅当支持图片输入）
+        4 = 会话级配置 provider_ltm_settings.image_caption_provider_id
+        0 = 全部不可用
         """
         # 1. 插件自身配置
         configured_id = self._model_config.get("image_caption_provider_id", "").strip()
         if configured_id:
             provider = self._context.get_provider_by_id(configured_id)
             if provider and isinstance(provider, Provider):
-                return provider
+                return provider, 1
             if provider:
                 logger.warning(
                     f"[SmartForward] 配置的图片转述提供商 '{configured_id}' 不是对话模型类型"
@@ -102,7 +102,7 @@ class LLMService:
         if caption_id:
             provider = self._context.get_provider_by_id(caption_id)
             if provider and isinstance(provider, Provider):
-                return provider
+                return provider, 2
 
         # 3. 当前会话的对话模型（仅当支持图片输入）
         if umo:
@@ -113,7 +113,7 @@ class LLMService:
                         logger.info(
                             "[SmartForward] 未配置专用图片转述模型，当前对话模型支持图片输入，直接复用于图片转述"
                         )
-                        return provider
+                        return provider, 3
                     logger.warning(
                         f"[SmartForward] 当前对话模型 {_provider_label(provider)} 不支持图片输入，"
                         "继续查找下一级"
@@ -129,13 +129,18 @@ class LLMService:
         if session_caption_id:
             provider = self._context.get_provider_by_id(session_caption_id)
             if provider and isinstance(provider, Provider):
-                return provider
+                return provider, 4
 
         logger.error(
             "[SmartForward] 未找到可用的图片转述模型：插件配置、默认图片转述模型、"
             "当前对话模型（不支持图片输入）均不可用，且未配置群聊图片转述模型"
         )
-        return None
+        return None, 0
+
+    def _get_caption_provider(self, umo: str = "") -> Provider | None:
+        """获取图片转述模型提供商（回退链结果，见 _resolve_caption_provider）。"""
+        provider, _ = self._resolve_caption_provider(umo)
+        return provider
 
     # ─── 图片转述 ─────────────────────────────────────────────
 

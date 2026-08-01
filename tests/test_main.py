@@ -239,18 +239,18 @@ def test_process_pending_handles_cancelled_error_result(make_event):
         result = await plugin._process_pending(
             umo, [(event, detect_result, time.monotonic())]
         )
-        assert result is None
+        assert result == (None, [])
 
     asyncio.run(scenario())
 
 
 def test_process_pending_empty_returns_none():
-    """空暂存列表：_process_pending 直接返回 None（不抛 IndexError）。"""
+    """空暂存列表：_process_pending 直接返回 (None, [])（不抛 IndexError）。"""
     plugin = make_plugin()
 
     async def scenario():
         result = await plugin._process_pending("umo", [])
-        assert result is None
+        assert result == (None, [])
 
     asyncio.run(scenario())
 
@@ -281,3 +281,67 @@ def test_on_llm_request_logs_chat_model(make_event):
         )
 
     asyncio.run(scenario())
+
+
+def test_direct_image_injection_when_chat_model_multimodal(make_event):
+    """当前对话模型支持图片输入（level 3）：图片以 ImageURLPart 原生注入，
+    不调用图片转述模型。"""
+    from astrbot.core.agent.message import ImageURLPart
+
+    plugin = make_plugin()
+
+    from astrbot.core.provider.provider import Provider as _StubProvider
+
+    class _ChatProvider(_StubProvider):
+        model_name = "mimo-v2.5"
+        provider_config = {"id": "chat-mimo", "modalities": ["text", "image"]}
+
+    # 补齐真实 AstrBot Context 的方法（make_plugin 用空 SimpleNamespace）
+    plugin.context.get_using_provider = lambda umo=None: _ChatProvider()
+    plugin.context.get_provider_by_id = lambda pid: None
+    plugin.context.get_config = lambda umo=None: {
+        "provider_settings": {},
+        "provider_ltm_settings": {},
+    }
+
+    # 给 LLMService 注入可记录的 provider，验证 describe_images 未被调用
+    calls = []
+    plugin._llm.describe_images = lambda *a, **k: calls.append(a) or ["(图片)"]
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        fwd = make_event(
+            segments=[Forward(id="fwd-img")],
+            umo=umo,
+            bot_payload=_img_fwd_payload("https://example.com/a.jpg"),
+        )
+        await plugin.on_message(fwd)
+        trigger = make_event(segments=[Text(text="看看")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+
+        # 转述未被调用
+        assert calls == []
+        # 注入包含 ImageURLPart 且 mark_as_temp
+        parts = req.extra_user_content_parts
+        img_parts = [p for p in parts if isinstance(p, ImageURLPart)]
+        assert len(img_parts) == 1
+        assert img_parts[0].image_url.url == "https://example.com/a.jpg"
+        assert img_parts[0]._no_save is True
+
+    asyncio.run(scenario())
+
+
+def _img_fwd_payload(img_url):
+    """构造含一张图片的转发负载。"""
+    return {
+        "messages": [
+            {
+                "sender": {"nickname": "甲"},
+                "content": [
+                    {"type": "image", "data": {"url": img_url}},
+                    {"type": "text", "data": {"text": "看图"}},
+                ],
+            }
+        ]
+    }

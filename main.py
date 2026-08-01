@@ -121,12 +121,12 @@ class SmartForward(Star):
         if not pending:
             return
 
-        merged_text = await self._process_pending(umo, pending)
+        merged_text, direct_image_urls = await self._process_pending(umo, pending)
         if not merged_text:
             logger.error("[SmartForward] 全部暂存转发解析失败，跳过注入")
             return
 
-        from astrbot.core.agent.message import TextPart
+        from astrbot.core.agent.message import ImageURLPart, TextPart
 
         # 注入（mark_as_temp 防止主管道二次持久化，
         # 转发内容已由插件通过 write_forward_pair 写入会话历史）
@@ -135,6 +135,11 @@ class SmartForward(Star):
                 text=f"<forwarded_message_context>\n{merged_text}\n</forwarded_message_context>"
             ).mark_as_temp()
         )
+        # 图片直通：当前对话模型支持图片输入时，图片原生随请求发给模型（无需转述）
+        for url in direct_image_urls:
+            req.extra_user_content_parts.append(
+                ImageURLPart(image_url=ImageURLPart.ImageURL(url=url)).mark_as_temp()
+            )
         logger.info("[SmartForward] 已将暂存的转发内容注入主管道请求")
         # 记录文字解析将使用的对话模型（转发文字由主管道当前对话模型解析）
         try:
@@ -226,21 +231,23 @@ class SmartForward(Star):
 
     # ─── 按需解析 ─────────────────────────────────────────────
 
-    async def _process_pending(self, umo: str, pending: list) -> str | None:
+    async def _process_pending(
+        self, umo: str, pending: list
+    ) -> tuple[str | None, list[str]]:
         """逐条解析暂存转发并合并为注入文本。
 
         单条失败/为空：跳过该条并 _remove_dedup（允许重试），继续其余。
-        全部失败：返回 None（纯转发场景已在 on_llm_request 顶部吞掉）。
+        全部失败：返回 (None, [])（纯转发场景已在 on_llm_request 顶部吞掉）。
 
         Args:
             umo: 统一消息来源标识
             pending: _drain_pending 返回的暂存条目列表
 
         Returns:
-            合并后的用户消息文本，全部失败时返回 None
+            (合并后的用户消息文本, 直通图片 URL 列表)；全部失败时返回 (None, [])
         """
         if not pending:
-            return None
+            return None, []
 
         all_messages: list[ParsedMessage] = []
         all_image_urls: list[str] = []
@@ -281,30 +288,45 @@ class SmartForward(Star):
             all_image_urls.extend(result.image_urls)
 
         if not any_success:
-            return None
+            return None, []
 
-        # 图片转述（URL 去重在 LLMService 内部；开关关闭时返回占位符）
+        # 图片处理：
+        # - level 3（当前对话模型支持图片输入）→ 图片直通，不转述，原生发给模型
+        # - 其他 level → 调用图片转述模型生成文字描述（开关关闭时返回占位符）
         image_descriptions: list[str] = []
+        direct_image_urls: list[str] = []
         if all_image_urls:
-            caption_prompt = (
-                self.model_config.get("image_caption_prompt", "").strip()
-                or DEFAULT_IMAGE_CAPTION_PROMPT
-            )
-            try:
-                image_descriptions = await asyncio.wait_for(
-                    self._llm.describe_images(all_image_urls, caption_prompt, umo=umo),
-                    timeout=_CAPTION_TIMEOUT,
+            caption_provider, caption_level = self._llm._resolve_caption_provider(umo)
+            if caption_provider and caption_level == 3:
+                direct_image_urls = all_image_urls
+                logger.info(
+                    f"[SmartForward] 当前对话模型支持图片输入，图片直通不转述（{len(all_image_urls)} 张）"
                 )
-            except Exception as e:
-                logger.error(f"[SmartForward] 图片转述失败: {type(e).__name__}: {e}")
-                image_descriptions = ["(图片)"] * len(all_image_urls)
+            else:
+                caption_prompt = (
+                    self.model_config.get("image_caption_prompt", "").strip()
+                    or DEFAULT_IMAGE_CAPTION_PROMPT
+                )
+                try:
+                    image_descriptions = await asyncio.wait_for(
+                        self._llm.describe_images(
+                            all_image_urls, caption_prompt, umo=umo
+                        ),
+                        timeout=_CAPTION_TIMEOUT,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[SmartForward] 图片转述失败: {type(e).__name__}: {e}"
+                    )
+                    image_descriptions = ["(图片)"] * len(all_image_urls)
 
         # 合并构建用户消息文本（多条转发合并为一段）
         sender_name = pending[0][0].get_sender_name()
         is_group = bool(pending[0][0].get_group_id())
-        return self._llm.build_user_message_text(
+        merged_text = self._llm.build_user_message_text(
             all_messages, image_descriptions, sender_name, is_group
         )
+        return merged_text, direct_image_urls
 
     # ─── 辅助方法 ─────────────────────────────────────────────
 

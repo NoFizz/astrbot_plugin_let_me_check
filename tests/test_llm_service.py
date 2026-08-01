@@ -156,6 +156,34 @@ def test_caption_provider_errors_when_all_levels_unavailable():
     assert any("未配置" in msg and "群聊图片转述模型" in msg for msg in errors)
 
 
+def test_resolve_caption_provider_reports_level():
+    """_resolve_caption_provider 返回 (provider, level)：1=插件 2=全局 3=对话模型 4=ltm 0=无。"""
+    # level 1: 插件配置命中
+    plug = FakeProvider()
+    plug.pid = "plug-cap"
+    plug.provider_config = {"id": "plug-cap", "modalities": ["image"]}
+    ctx1 = make_context(provider=plug)
+    svc1 = LLMService(ctx1, {"image_caption_provider_id": "plug-cap"})
+    p1, l1 = svc1._resolve_caption_provider("umo-x")
+    assert p1 is plug and l1 == 1
+
+    # level 3: 当前对话模型（支持图片输入）
+    chat = FakeProvider()
+    chat.provider_config = {"id": "chat-1", "modalities": ["image"]}
+    ctx3 = make_context(provider=chat)
+    svc3 = LLMService(ctx3, {})
+    p3, l3 = svc3._resolve_caption_provider("umo-x")
+    assert p3 is chat and l3 == 3
+
+    # level 0: 全部不可用（对话模型不支持图片、无 ltm）
+    chat0 = FakeProvider()
+    chat0.provider_config = {"id": "chat-0", "modalities": ["text"]}
+    ctx0 = make_context(provider=chat0)
+    svc0 = LLMService(ctx0, {})
+    p0, l0 = svc0._resolve_caption_provider("umo-x")
+    assert p0 is None and l0 == 0
+
+
 def test_invalid_caption_concurrency_falls_back_to_default():
     """非整数 image_caption_concurrency 配置回退到默认并发数 5。"""
     svc_bad = LLMService(SimpleNamespace(), {"image_caption_concurrency": "abc"})

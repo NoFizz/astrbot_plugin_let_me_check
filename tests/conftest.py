@@ -196,6 +196,23 @@ class TextPart:
         return self
 
 
+class ImageURLPart:
+    """Mirror of the real ImageURLPart: carries image url, mark_as_temp() sets _no_save."""
+
+    class ImageURL:
+        def __init__(self, url="", id=None):
+            self.url = url
+            self.id = id
+
+    def __init__(self, image_url=None):
+        self.image_url = image_url or self.ImageURL()
+        self._no_save = False
+
+    def mark_as_temp(self):
+        self._no_save = True
+        return self
+
+
 class UserMessageSegment:
     def __init__(self, content=None):
         self.content = content or []
@@ -209,6 +226,7 @@ class AssistantMessageSegment:
 _leaf_module(
     "astrbot.core.agent.message",
     TextPart=TextPart,
+    ImageURLPart=ImageURLPart,
     UserMessageSegment=UserMessageSegment,
     AssistantMessageSegment=AssistantMessageSegment,
 )
