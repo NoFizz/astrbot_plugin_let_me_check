@@ -4,6 +4,8 @@ chat line building and reply generation."""
 import asyncio
 from types import SimpleNamespace
 
+from astrbot.api import logger
+
 from astrbot_plugin_let_me_check.llm_service import LLMService
 from astrbot_plugin_let_me_check.models import ParsedMessage
 
@@ -15,6 +17,9 @@ class FakeProvider(Provider):
         super().__init__()
         self.calls = []
         self.response_text = response_text
+        self.pid = ""
+        self.model_name = ""
+        self.provider_config = {"id": ""}
 
     async def text_chat(self, prompt="", image_urls=None):
         self.calls.append({"prompt": prompt, "image_urls": image_urls or []})
@@ -115,3 +120,44 @@ def test_describe_images_disabled_returns_placeholder_without_provider_call():
     )
     assert result == ["(图片)", "(图片)"]
     assert provider.calls == []  # 未调用任何模型
+
+
+def test_provider_label_formats_identifiers():
+    """_provider_label 输出提供商 id 与模型名；meta() 优先；无属性回退类名。"""
+    from astrbot_plugin_let_me_check.llm_service import _provider_label
+
+    class _MetaProvider:
+        def meta(self):
+            return SimpleNamespace(id="p1", model="m1")
+
+    assert _provider_label(_MetaProvider()) == "p1 / m1"
+
+    class _CfgProvider:
+        provider_config = {"id": "openai-cfg"}
+        model_name = "gpt-4o"
+
+    assert _provider_label(_CfgProvider()) == "openai-cfg / gpt-4o"
+
+    class _Bare:
+        pass
+
+    assert _provider_label(_Bare()) == "_Bare"
+
+
+def test_describe_images_logs_caption_provider_model():
+    """转述图片时日志记录正在使用的图片转述模型（提供商 id / 模型名）。"""
+    provider = FakeProvider()
+    provider.pid = "cap-1"
+    provider.model_name = "test-caption-model"
+    provider.provider_config = {"id": "cap-1"}
+    context = make_context(provider)
+    svc = LLMService(
+        context,
+        {"image_caption_provider_id": "cap-1", "image_caption_concurrency": 2},
+    )
+    asyncio.run(svc.describe_images(["https://a/1.jpg"], "描述吧", umo="u"))
+    infos = [msg for lvl, msg in logger.logs if lvl == "info"]
+    assert any(
+        "图片转述模型" in msg and "cap-1 / test-caption-model" in msg
+        for msg in infos
+    )

@@ -4,6 +4,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 
+from astrbot.api import logger
 from astrbot_plugin_let_me_check.main import SmartForward
 from astrbot_plugin_let_me_check.parser import detect_forward
 
@@ -250,5 +251,33 @@ def test_process_pending_empty_returns_none():
     async def scenario():
         result = await plugin._process_pending("umo", [])
         assert result is None
+
+    asyncio.run(scenario())
+
+
+def test_on_llm_request_logs_chat_model(make_event):
+    """注入转发内容时日志记录将由哪个对话模型解析文字。"""
+    plugin = make_plugin()
+
+    class _ChatProvider:
+        model_name = "main-chat-model"
+        provider_config = {"id": "chat-cfg"}
+
+    plugin.context.get_using_provider = lambda umo=None: _ChatProvider()
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        fwd = make_event(
+            segments=[Forward(id="fwd-1")], umo=umo, bot_payload=_fwd_payload("转发内容")
+        )
+        await plugin.on_message(fwd)
+        trigger = make_event(segments=[Text(text="看看")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+        infos = [msg for lvl, msg in logger.logs if lvl == "info"]
+        assert any(
+            "对话模型" in msg and "chat-cfg / main-chat-model" in msg
+            for msg in infos
+        )
 
     asyncio.run(scenario())

@@ -43,20 +43,38 @@ for _pkg in (
 ):
     _namespace_pkg(_pkg)
 
-# ── astrbot.api.logger (no-op) ─────────────────────────────────
-def _noop(*args, **kwargs):
-    return None
+# ── astrbot.api.logger (collector) ─────────────────────────────
+_log_records: list[tuple[str, str]] = []
 
 
-_leaf_module(
+def _log_collector(level: str):
+    """构造收集型 logger stub：记录 (level, message) 供测试断言。"""
+
+    def _collect(*args, **kwargs):
+        _log_records.append((level, str(args[0]) if args else ""))
+        return None
+
+    return _collect
+
+
+_logger_mod = _leaf_module(
     "astrbot.api.logger",
-    debug=_noop,
-    info=_noop,
-    warning=_noop,
-    error=_noop,
-    critical=_noop,
-    exception=_noop,
+    debug=_log_collector("debug"),
+    info=_log_collector("info"),
+    warning=_log_collector("warning"),
+    error=_log_collector("error"),
+    critical=_log_collector("critical"),
+    exception=_log_collector("exception"),
 )
+_logger_mod.logs = _log_records
+
+
+@pytest.fixture(autouse=True)
+def _reset_logs():
+    """每个测试前后清空收集的日志记录，保证用例隔离。"""
+    _log_records.clear()
+    yield
+    _log_records.clear()
 
 # ── astrbot.api.message_components ─────────────────────────────
 class _BaseComponent:

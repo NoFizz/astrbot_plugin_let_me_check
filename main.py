@@ -23,7 +23,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
 from .history import HistoryManager
-from .llm_service import LLMService
+from .llm_service import LLMService, _provider_label
 from .models import (
     DEFAULT_IMAGE_CAPTION_PROMPT,
     ForwardDetectResult,
@@ -136,6 +136,18 @@ class SmartForward(Star):
             ).mark_as_temp()
         )
         logger.info("[SmartForward] 已将暂存的转发内容注入主管道请求")
+        # 记录文字解析将使用的对话模型（转发文字由主管道当前对话模型解析）
+        try:
+            chat_provider = self.context.get_using_provider(umo=umo)
+            if chat_provider:
+                logger.info(
+                    f"[SmartForward] 转发文字内容将由当前对话模型解析 | "
+                    f"提供商: {_provider_label(chat_provider)}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[SmartForward] 获取当前对话模型失败: {type(e).__name__}: {e}"
+            )
         await self._history.write_forward_pair(umo, merged_text, "")
 
     @filter.event_message_type(filter.EventMessageType.ALL)

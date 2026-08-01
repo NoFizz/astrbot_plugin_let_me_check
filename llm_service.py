@@ -14,6 +14,25 @@ from astrbot.core.provider.provider import Provider
 from .models import ParsedMessage
 
 
+def _provider_label(provider) -> str:
+    """返回 provider 的可读标识（提供商 id / 模型名），用于日志。
+
+    防御式获取：真实 Provider 具备 meta()（ProviderMeta: id/model/type），
+    未知形状对象依次回退 provider_config.id、model_name，最终用类名兜底。
+    """
+    try:
+        meta = provider.meta()
+        return f"{meta.id} / {meta.model}"
+    except Exception:
+        pass
+    cfg = getattr(provider, "provider_config", None)
+    pid = cfg.get("id", "") if isinstance(cfg, dict) else ""
+    model = getattr(provider, "model_name", "") or ""
+    if pid and model:
+        return f"{pid} / {model}"
+    return pid or model or type(provider).__name__
+
+
 class LLMService:
     """LLM 交互服务，封装所有模型调用逻辑"""
 
@@ -122,6 +141,10 @@ class LLMService:
 
         # URL 去重：只转述唯一 URL
         unique_urls = list(dict.fromkeys(urls))  # 保序去重
+        logger.info(
+            f"[SmartForward] 正在使用图片转述模型解析 {len(unique_urls)} 张图片 | "
+            f"提供商: {_provider_label(provider)}"
+        )
         sem = asyncio.Semaphore(self._caption_concurrency)
         caption_map: dict[str, str] = {}
 
