@@ -5,16 +5,26 @@
 通过 conversation_manager.update_conversation() 写入 user/assistant 条目。
 """
 
+import asyncio
 import json
 
 from astrbot.api import logger
 
 
 class HistoryManager:
-    """会话历史管理器，提供原子化写入"""
+    """会话历史管理器：串行化本插件实例内的历史写入。
+
+    通过 asyncio.Lock 保护"读取-追加-整体覆写"（read-modify-write）流程，
+    避免同一插件实例内并发调用 write_forward_pair() 时相互覆盖、丢失条目。
+
+    注意：该锁仅覆盖本插件实例自身的写入。AstrBot 框架对同一会话的并发写入
+    不在保护范围内 —— 框架没有原子追加接口（add_message_pair 内部同样执行
+    整体覆写式的读写修改），因此本类不承诺跨实例的绝对原子性。
+    """
 
     def __init__(self, context):
         self._context = context
+        self._lock = asyncio.Lock()
 
     async def write_forward_pair(
         self, umo: str, user_text: str, assistant_text: str = ""
@@ -37,9 +47,10 @@ class HistoryManager:
             if not cid:
                 return
 
-            await self._write_via_update_conversation(
-                cm, umo, cid, user_text, assistant_text
-            )
+            async with self._lock:
+                await self._write_via_update_conversation(
+                    cm, umo, cid, user_text, assistant_text
+                )
 
         except Exception as e:
             logger.error(f"[SmartForward] 写入会话历史失败: {type(e).__name__}: {e}")
@@ -61,7 +72,10 @@ class HistoryManager:
                 parsed = json.loads(history)
                 if isinstance(parsed, list):
                     msgs = parsed
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"[SmartForward] 解析会话历史失败，使用空历史继续: {type(e).__name__}: {e}"
+            )
             msgs = []
 
         msgs.append({"role": "user", "content": user_text})
