@@ -94,6 +94,37 @@ def test_caption_provider_falls_back_to_using_provider():
     assert svc._get_caption_provider("umo-x") is provider
 
 
+def test_supports_image_input_semantics():
+    """_supports_image_input：modalities 含 image 或未配置 → True；否则 False。"""
+    svc = LLMService(SimpleNamespace(), {})
+
+    class _NoModalities:
+        provider_config = {"id": "p1"}  # 未配置 → 默认支持所有模态
+
+    assert svc._supports_image_input(_NoModalities()) is True
+
+    class _WithImage:
+        provider_config = {"id": "p2", "modalities": ["text", "image"]}
+
+    assert svc._supports_image_input(_WithImage()) is True
+
+    class _TextOnly:
+        provider_config = {"id": "p3", "modalities": ["text", "tool_use"]}
+
+    assert svc._supports_image_input(_TextOnly()) is False
+
+
+def test_caption_provider_skips_text_only_fallback_model():
+    """回退的对话模型不支持图片输入（modalities 无 image）→ 返回 None 而非盲目调用。"""
+    provider = FakeProvider()
+    provider.provider_config = {"id": "chat-1", "modalities": ["text"]}
+    context = make_context(provider)
+    svc = LLMService(context, {})
+    assert svc._get_caption_provider("umo-x") is None
+    warnings = [msg for lvl, msg in logger.logs if lvl == "warning"]
+    assert any("不支持图片输入" in msg for msg in warnings)
+
+
 def test_invalid_caption_concurrency_falls_back_to_default():
     """非整数 image_caption_concurrency 配置回退到默认并发数 5。"""
     svc_bad = LLMService(SimpleNamespace(), {"image_caption_concurrency": "abc"})

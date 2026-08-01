@@ -55,6 +55,18 @@ class LLMService:
 
     # ─── 提供商获取 ─────────────────────────────────────────────
 
+    def _supports_image_input(self, provider) -> bool:
+        """判断 provider 是否支持图片输入。
+
+        依据 provider_config["modalities"]（WebUI"模型能力"配置）：
+        - 未配置（None/空）→ 默认支持所有模态（与 AstrBot core 语义一致）
+        - 配置了 → 仅当包含 "image" 时支持
+        """
+        modalities = getattr(provider, "provider_config", {}).get("modalities")
+        if not modalities:
+            return True
+        return "image" in modalities
+
     def _get_caption_provider(self, umo: str = "") -> Provider | None:
         """获取图片转述模型提供商。
 
@@ -104,10 +116,15 @@ class LLMService:
             try:
                 provider = self._context.get_using_provider(umo=umo)
                 if provider and isinstance(provider, Provider):
-                    logger.info(
-                        "[SmartForward] 未配置专用图片转述模型，回退使用当前对话模型"
+                    if self._supports_image_input(provider):
+                        logger.info(
+                            "[SmartForward] 未配置专用图片转述模型，当前对话模型支持图片输入，直接复用于图片转述"
+                        )
+                        return provider
+                    logger.warning(
+                        f"[SmartForward] 当前对话模型 {_provider_label(provider)} 不支持图片输入，"
+                        "无法转述图片"
                     )
-                    return provider
             except Exception as e:
                 logger.warning(
                     f"[SmartForward] 获取回退对话模型失败: {type(e).__name__}: {e}"
