@@ -20,27 +20,21 @@ class LLMService:
     def __init__(self, context, model_config: dict):
         self._context = context
         self._model_config = model_config
-        self._caption_concurrency = max(
-            1, int(model_config.get("image_caption_concurrency", 5))
-        )
+        raw_concurrency = model_config.get("image_caption_concurrency", 5)
+        try:
+            caption_concurrency = int(raw_concurrency)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[SmartForward] image_caption_concurrency 配置值 {raw_concurrency!r} "
+                f"无效，已回退到默认值 5"
+            )
+            caption_concurrency = 5
+        self._caption_concurrency = max(1, caption_concurrency)
         self._image_caption_enabled = bool(
             model_config.get("image_caption_enabled", True)
         )
 
     # ─── 提供商获取 ─────────────────────────────────────────────
-
-    def _get_chat_provider(self, umo: str) -> Provider | None:
-        """获取对话模型提供商"""
-        configured_id = self._model_config.get("provider_id", "").strip()
-        if configured_id:
-            provider = self._context.get_provider_by_id(configured_id)
-            if provider and isinstance(provider, Provider):
-                return provider
-            if provider:
-                logger.warning(
-                    f"[SmartForward] 配置的提供商 '{configured_id}' 不是对话模型类型"
-                )
-        return self._context.get_using_provider(umo=umo)
 
     def _get_caption_provider(self, umo: str = "") -> Provider | None:
         """获取图片转述模型提供商。
@@ -95,8 +89,10 @@ class LLMService:
                         "[SmartForward] 未配置专用图片转述模型，回退使用当前对话模型"
                     )
                     return provider
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"[SmartForward] 获取回退对话模型失败: {type(e).__name__}: {e}"
+                )
 
         return None
 

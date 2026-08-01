@@ -89,6 +89,14 @@ def test_caption_provider_falls_back_to_using_provider():
     assert svc._get_caption_provider("umo-x") is provider
 
 
+def test_invalid_caption_concurrency_falls_back_to_default():
+    """非整数 image_caption_concurrency 配置回退到默认并发数 5。"""
+    svc_bad = LLMService(SimpleNamespace(), {"image_caption_concurrency": "abc"})
+    assert svc_bad._caption_concurrency == 5
+    svc_none = LLMService(SimpleNamespace(), {"image_caption_concurrency": None})
+    assert svc_none._caption_concurrency == 5
+
+
 def test_describe_images_disabled_returns_placeholder_without_provider_call():
     """image_caption_enabled=False 时：返回占位符，且不调用任何模型。"""
     provider = FakeProvider()
