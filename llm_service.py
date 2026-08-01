@@ -73,8 +73,9 @@ class LLMService:
         查找顺序：
         1. 插件配置的 image_caption_provider_id
         2. 全局配置 provider_settings.default_image_caption_provider_id
-        3. 会话级配置 provider_ltm_settings.image_caption_provider_id
-        4. 回退到当前会话的对话模型（多模态模型本身可处理图片）
+        3. 当前会话的对话模型（仅当支持图片输入，modalities 含 image 或未配置）
+        4. 会话级配置 provider_ltm_settings.image_caption_provider_id（最终兜底）
+           若仍未配置，记录 error 日志并返回 None
         """
         # 1. 插件自身配置
         configured_id = self._model_config.get("image_caption_provider_id", "").strip()
@@ -103,15 +104,7 @@ class LLMService:
             if provider and isinstance(provider, Provider):
                 return provider
 
-        # 3. 会话级配置（“群聊上下文感知 → 群聊图片转述模型”）
-        ltm_cfg = session_cfg.get("provider_ltm_settings", {})
-        session_caption_id = ltm_cfg.get("image_caption_provider_id", "")
-        if session_caption_id:
-            provider = self._context.get_provider_by_id(session_caption_id)
-            if provider and isinstance(provider, Provider):
-                return provider
-
-        # 4. 回退到当前会话的对话模型（多模态模型本身可处理图片）
+        # 3. 当前会话的对话模型（仅当支持图片输入）
         if umo:
             try:
                 provider = self._context.get_using_provider(umo=umo)
@@ -123,13 +116,25 @@ class LLMService:
                         return provider
                     logger.warning(
                         f"[SmartForward] 当前对话模型 {_provider_label(provider)} 不支持图片输入，"
-                        "无法转述图片"
+                        "继续查找下一级"
                     )
             except Exception as e:
                 logger.warning(
-                    f"[SmartForward] 获取回退对话模型失败: {type(e).__name__}: {e}"
+                    f"[SmartForward] 获取当前对话模型失败: {type(e).__name__}: {e}"
                 )
 
+        # 4. 会话级配置（“群聊上下文感知 → 群聊图片转述模型”）——最终兜底
+        ltm_cfg = session_cfg.get("provider_ltm_settings", {})
+        session_caption_id = ltm_cfg.get("image_caption_provider_id", "")
+        if session_caption_id:
+            provider = self._context.get_provider_by_id(session_caption_id)
+            if provider and isinstance(provider, Provider):
+                return provider
+
+        logger.error(
+            "[SmartForward] 未找到可用的图片转述模型：插件配置、默认图片转述模型、"
+            "当前对话模型（不支持图片输入）均不可用，且未配置群聊图片转述模型"
+        )
         return None
 
     # ─── 图片转述 ─────────────────────────────────────────────

@@ -26,15 +26,19 @@ class FakeProvider(Provider):
         return SimpleNamespace(completion_text=self.response_text)
 
 
-def make_context(provider=None):
+def make_context(provider=None, ltm_provider=None, provider_ltm_settings=None):
+    def get_provider_by_id(pid):
+        for p in (provider, ltm_provider):
+            if p and pid == p.pid:
+                return p
+        return None
+
     return SimpleNamespace(
-        get_provider_by_id=lambda pid: (
-            provider if provider and pid == provider.pid else None
-        ),
+        get_provider_by_id=get_provider_by_id,
         get_using_provider=lambda umo=None: provider,
         get_config=lambda umo=None: {
             "provider_settings": {},
-            "provider_ltm_settings": {},
+            "provider_ltm_settings": provider_ltm_settings or {},
         },
     )
 
@@ -115,7 +119,7 @@ def test_supports_image_input_semantics():
 
 
 def test_caption_provider_skips_text_only_fallback_model():
-    """回退的对话模型不支持图片输入（modalities 无 image）→ 返回 None 而非盲目调用。"""
+    """回退的对话模型不支持图片输入（modalities 无 image）→ 跳过，不盲目调用。"""
     provider = FakeProvider()
     provider.provider_config = {"id": "chat-1", "modalities": ["text"]}
     context = make_context(provider)
@@ -123,6 +127,33 @@ def test_caption_provider_skips_text_only_fallback_model():
     assert svc._get_caption_provider("umo-x") is None
     warnings = [msg for lvl, msg in logger.logs if lvl == "warning"]
     assert any("不支持图片输入" in msg for msg in warnings)
+
+
+def test_caption_provider_prefers_ltm_model_over_errors():
+    """对话模型不支持图片输入时，回退链第 4 级使用'群聊图片转述模型'（ltm 配置）。"""
+    chat = FakeProvider()
+    chat.provider_config = {"id": "chat-1", "modalities": ["text"]}  # 不支持图片
+    ltm = FakeProvider()
+    ltm.pid = "ltm-cap"
+    ltm.provider_config = {"id": "ltm-cap", "modalities": ["text", "image"]}
+    context = make_context(
+        provider=chat,
+        ltm_provider=ltm,
+        provider_ltm_settings={"image_caption_provider_id": "ltm-cap"},
+    )
+    svc = LLMService(context, {})
+    assert svc._get_caption_provider("umo-x") is ltm
+
+
+def test_caption_provider_errors_when_all_levels_unavailable():
+    """回退链全部不可用（含 ltm 未配置）→ 返回 None 且日志出现 error。"""
+    chat = FakeProvider()
+    chat.provider_config = {"id": "chat-1", "modalities": ["text"]}  # 不支持图片
+    context = make_context(provider=chat)
+    svc = LLMService(context, {})
+    assert svc._get_caption_provider("umo-x") is None
+    errors = [msg for lvl, msg in logger.logs if lvl == "error"]
+    assert any("未配置" in msg and "群聊图片转述模型" in msg for msg in errors)
 
 
 def test_invalid_caption_concurrency_falls_back_to_default():
