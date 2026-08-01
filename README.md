@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.1.0-blue?style=flat" alt="version">
+  <img src="https://img.shields.io/badge/version-2.2.0-blue?style=flat" alt="version">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat" alt="python">
   <img src="https://img.shields.io/badge/AstrBot->=4.26.0-orange?style=flat" alt="AstrBot version">
@@ -27,6 +27,7 @@
 - **群聊/私聊独立控制**：分别配置开关与白名单
 - **消息去重**：相同转发消息在同一会话中仅处理一次（1 小时有效期）
 - **暂存队列**：每会话暂存上限 10 条（超限丢最旧），暂存有效期 24 小时
+- **并发保护**：嵌套转发并行获取受并发上限约束，单次协议调用有超时保护
 
 ## 安装
 
