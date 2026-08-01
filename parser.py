@@ -101,13 +101,10 @@ def detect_forward(event) -> ForwardDetectResult | None:
                             if isinstance(rdata.get("messages"), list):
                                 forward_payload = {"messages": rdata["messages"]}
                             source = ForwardSource.RAW
-                            logger.info(
-                                f"[SmartForward] 从原始消息检测到 forward 段 | type={rtype} | id={forward_id}"
-                            )
                             break
 
     except Exception as e:
-        logger.error(f"[SmartForward] 转发检测异常: {type(e).__name__}: {e}")
+        logger.error(f"转发检测异常: {type(e).__name__}: {e}")
         return None
 
     if not forward_id and not forward_payload:
@@ -175,7 +172,7 @@ async def _resolve_raw_messages(
         )
         return _extract_messages_from_forward_data(forward_data)
     except Exception as e:
-        logger.error(f"[SmartForward] 获取合并转发失败: {e}")
+        logger.error(f"获取合并转发失败: {e}")
         return []
 
 
@@ -286,7 +283,7 @@ async def _parse_nodes(
             for i, (insert_pos, _) in enumerate(nested_tasks):
                 result = nested_results[i]
                 if isinstance(result, Exception):
-                    logger.warning(f"[SmartForward] 嵌套解析失败: {result}")
+                    logger.warning(f"嵌套解析失败: {result}")
                     continue
                 nested_contexts, nested_images = result
                 if nested_contexts:

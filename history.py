@@ -53,7 +53,7 @@ class HistoryManager:
                 )
 
         except Exception as e:
-            logger.error(f"[SmartForward] 写入会话历史失败: {type(e).__name__}: {e}")
+            logger.error(f"写入会话历史失败: {type(e).__name__}: {e}")
 
     async def _write_via_update_conversation(
         self, cm, umo: str, cid: str, user_text: str, assistant_text: str
@@ -73,9 +73,7 @@ class HistoryManager:
                 if isinstance(parsed, list):
                     msgs = parsed
         except Exception as e:
-            logger.warning(
-                f"[SmartForward] 解析会话历史失败，使用空历史继续: {type(e).__name__}: {e}"
-            )
+            logger.warning(f"解析会话历史失败，使用空历史继续: {type(e).__name__}: {e}")
             msgs = []
 
         msgs.append({"role": "user", "content": user_text})

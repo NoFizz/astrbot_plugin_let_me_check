@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 
 from astrbot.api import logger
-from astrbot_plugin_let_me_check.main import SmartForward
+from astrbot_plugin_let_me_check.main import let_me_check
 from astrbot_plugin_let_me_check.parser import detect_forward
 
 from astrbot.api.message_components import Forward, Text
@@ -25,7 +25,7 @@ def make_plugin():
             "image_caption_enabled": True,
         },
     }
-    return SmartForward(SimpleNamespace(), config)
+    return let_me_check(SimpleNamespace(), config)
 
 
 def _fwd_payload(text="你好"):
@@ -239,24 +239,24 @@ def test_process_pending_handles_cancelled_error_result(make_event):
         result = await plugin._process_pending(
             umo, [(event, detect_result, time.monotonic())]
         )
-        assert result == (None, [])
+        assert result == (None, [], None, 0)
 
     asyncio.run(scenario())
 
 
 def test_process_pending_empty_returns_none():
-    """空暂存列表：_process_pending 直接返回 (None, [])（不抛 IndexError）。"""
+    """空暂存列表：_process_pending 直接返回 (None, [], None, 0)（不抛 IndexError）。"""
     plugin = make_plugin()
 
     async def scenario():
         result = await plugin._process_pending("umo", [])
-        assert result == (None, [])
+        assert result == (None, [], None, 0)
 
     asyncio.run(scenario())
 
 
 def test_on_llm_request_logs_chat_model(make_event):
-    """注入转发内容时日志记录将由哪个对话模型解析文字。"""
+    """注入转发内容时日志记录解析模型全名。"""
     plugin = make_plugin()
 
     class _ChatProvider:
@@ -276,7 +276,7 @@ def test_on_llm_request_logs_chat_model(make_event):
         await plugin.on_llm_request(trigger, req)
         infos = [msg for lvl, msg in logger.logs if lvl == "info"]
         assert any(
-            "对话模型" in msg and "chat-cfg / main-chat-model" in msg
+            "已注入转发上下文" in msg and "chat-cfg" in msg
             for msg in infos
         )
 

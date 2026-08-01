@@ -15,21 +15,19 @@ from .models import ParsedMessage
 
 
 def _provider_label(provider) -> str:
-    """返回 provider 的可读标识（提供商 id / 模型名），用于日志。
+    """返回 provider 的完整标识（提供商/型号，如 Go/mimo-v2.5），用于日志。
 
-    防御式获取：真实 Provider 具备 meta()（ProviderMeta: id/model/type），
+    防御式获取：真实 Provider 具备 meta()（ProviderMeta.id 即完整 id），
     未知形状对象依次回退 provider_config.id、model_name，最终用类名兜底。
     """
     try:
         meta = provider.meta()
-        return f"{meta.id} / {meta.model}"
+        return meta.id or meta.model or type(provider).__name__
     except Exception:
         pass
     cfg = getattr(provider, "provider_config", None)
     pid = cfg.get("id", "") if isinstance(cfg, dict) else ""
     model = getattr(provider, "model_name", "") or ""
-    if pid and model:
-        return f"{pid} / {model}"
     return pid or model or type(provider).__name__
 
 
@@ -44,7 +42,7 @@ class LLMService:
             caption_concurrency = int(raw_concurrency)
         except (TypeError, ValueError):
             logger.warning(
-                f"[SmartForward] image_caption_concurrency 配置值 {raw_concurrency!r} "
+                f"image_caption_concurrency 配置值 {raw_concurrency!r} "
                 f"无效，已回退到默认值 5"
             )
             caption_concurrency = 5
@@ -85,7 +83,7 @@ class LLMService:
                 return provider, 1
             if provider:
                 logger.warning(
-                    f"[SmartForward] 配置的图片转述提供商 '{configured_id}' 不是对话模型类型"
+                    f"配置的图片转述提供商 '{configured_id}' 不是对话模型类型"
                 )
 
         # 2. 全局默认配置（“默认图片转述模型”）
@@ -110,18 +108,14 @@ class LLMService:
                 provider = self._context.get_using_provider(umo=umo)
                 if provider and isinstance(provider, Provider):
                     if self._supports_image_input(provider):
-                        logger.info(
-                            "[SmartForward] 未配置专用图片转述模型，当前对话模型支持图片输入，直接复用于图片转述"
-                        )
+                        logger.debug("当前对话模型支持图片输入，图片将直通解析")
                         return provider, 3
                     logger.warning(
-                        f"[SmartForward] 当前对话模型 {_provider_label(provider)} 不支持图片输入，"
+                        f"当前对话模型 {_provider_label(provider)} 不支持图片输入，"
                         "继续查找下一级"
                     )
             except Exception as e:
-                logger.warning(
-                    f"[SmartForward] 获取当前对话模型失败: {type(e).__name__}: {e}"
-                )
+                logger.warning(f"获取当前对话模型失败: {type(e).__name__}: {e}")
 
         # 4. 会话级配置（“群聊上下文感知 → 群聊图片转述模型”）——最终兜底
         ltm_cfg = session_cfg.get("provider_ltm_settings", {})
@@ -132,7 +126,7 @@ class LLMService:
                 return provider, 4
 
         logger.error(
-            "[SmartForward] 未找到可用的图片转述模型：插件配置、默认图片转述模型、"
+            "未找到可用的图片转述模型：插件配置、默认图片转述模型、"
             "当前对话模型（不支持图片输入）均不可用，且未配置群聊图片转述模型"
         )
         return None, 0
@@ -158,19 +152,17 @@ class LLMService:
             return []
 
         if not self._image_caption_enabled:
-            logger.info("[SmartForward] 图片转述已关闭，使用占位符")
             return ["(图片)"] * len(urls)
 
         provider = self._get_caption_provider(umo)
         if not provider:
-            logger.info("[SmartForward] 未找到可用的图片转述模型，使用默认占位符")
             return ["(图片)"] * len(urls)
 
         # URL 去重：只转述唯一 URL
         unique_urls = list(dict.fromkeys(urls))  # 保序去重
         logger.info(
-            f"[SmartForward] 正在使用图片转述模型解析 {len(unique_urls)} 张图片 | "
-            f"提供商: {_provider_label(provider)}"
+            f"正在使用图片转述模型解析 {len(unique_urls)} 张图片 | "
+            f"模型: {_provider_label(provider)}"
         )
         sem = asyncio.Semaphore(self._caption_concurrency)
         caption_map: dict[str, str] = {}
@@ -184,9 +176,7 @@ class LLMService:
                     else:
                         caption_map[url] = "(图片)"
                 except Exception as e:
-                    logger.warning(
-                        f"[SmartForward] 图片描述失败: {type(e).__name__}: {e}"
-                    )
+                    logger.warning(f"图片描述失败: {type(e).__name__}: {e}")
                     caption_map[url] = "(图片)"
 
         await asyncio.gather(*[_caption_one(url) for url in unique_urls])

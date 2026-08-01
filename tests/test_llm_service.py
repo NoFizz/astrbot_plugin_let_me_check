@@ -213,20 +213,20 @@ def test_describe_images_disabled_returns_placeholder_without_provider_call():
 
 
 def test_provider_label_formats_identifiers():
-    """_provider_label 输出提供商 id 与模型名；meta() 优先；无属性回退类名。"""
+    """_provider_label 输出完整 id（提供商/型号）；meta() 优先；无属性回退类名。"""
     from astrbot_plugin_let_me_check.llm_service import _provider_label
 
     class _MetaProvider:
         def meta(self):
             return SimpleNamespace(id="p1", model="m1")
 
-    assert _provider_label(_MetaProvider()) == "p1 / m1"
+    assert _provider_label(_MetaProvider()) == "p1"
 
     class _CfgProvider:
         provider_config = {"id": "openai-cfg"}
         model_name = "gpt-4o"
 
-    assert _provider_label(_CfgProvider()) == "openai-cfg / gpt-4o"
+    assert _provider_label(_CfgProvider()) == "openai-cfg"
 
     class _Bare:
         pass
@@ -235,7 +235,7 @@ def test_provider_label_formats_identifiers():
 
 
 def test_describe_images_logs_caption_provider_model():
-    """转述图片时日志记录正在使用的图片转述模型（提供商 id / 模型名）。"""
+    """转述图片时日志记录正在使用的图片转述模型（完整 id）。"""
     provider = FakeProvider()
     provider.pid = "cap-1"
     provider.model_name = "test-caption-model"
@@ -248,6 +248,6 @@ def test_describe_images_logs_caption_provider_model():
     asyncio.run(svc.describe_images(["https://a/1.jpg"], "描述吧", umo="u"))
     infos = [msg for lvl, msg in logger.logs if lvl == "info"]
     assert any(
-        "图片转述模型" in msg and "cap-1 / test-caption-model" in msg
+        "图片转述模型" in msg and "cap-1" in msg
         for msg in infos
     )

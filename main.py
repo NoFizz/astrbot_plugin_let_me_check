@@ -57,7 +57,7 @@ _CAPTION_TIMEOUT = 120  # 图片转述超时
     "2.2.0",
     "https://github.com/NoFizz/astrbot_plugin_let_me_check",
 )
-class SmartForward(Star):
+class let_me_check(Star):
     """智能合并转发消息分析插件"""
 
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -111,9 +111,7 @@ class SmartForward(Star):
         # 纯转发：中止本次 LLM 调用，转发已由 on_message 入队
         if self._is_pure_forward(event):
             event.stop_event()
-            logger.info(
-                "[SmartForward] 纯转发消息，中止本次 LLM 调用（等待后续消息触发）"
-            )
+            logger.info("纯转发消息，中止本次 LLM 调用（等待后续消息触发）")
             return
 
         # 有实质内容 → 触发解析：取出全部暂存
@@ -121,15 +119,21 @@ class SmartForward(Star):
         if not pending:
             return
 
-        merged_text, direct_image_urls = await self._process_pending(umo, pending)
+        (
+            merged_text,
+            direct_image_urls,
+            caption_label,
+            caption_count,
+        ) = await self._process_pending(umo, pending)
         if not merged_text:
-            logger.error("[SmartForward] 全部暂存转发解析失败，跳过注入")
+            logger.error("全部暂存转发解析失败，跳过注入")
             return
 
         from astrbot.core.agent.message import ImageURLPart, TextPart
 
         # 注入（mark_as_temp 防止主管道二次持久化，
         # 转发内容已由插件通过 write_forward_pair 写入会话历史）
+        # 文字与图片同请求注入，一并交给主管道模型解析（不分开调用）
         req.extra_user_content_parts.append(
             TextPart(
                 text=f"<forwarded_message_context>\n{merged_text}\n</forwarded_message_context>"
@@ -140,18 +144,32 @@ class SmartForward(Star):
             req.extra_user_content_parts.append(
                 ImageURLPart(image_url=ImageURLPart.ImageURL(url=url)).mark_as_temp()
             )
-        logger.info("[SmartForward] 已将暂存的转发内容注入主管道请求")
-        # 记录文字解析将使用的对话模型（转发文字由主管道当前对话模型解析）
+
+        # 合并注入日志：一次触发只输出一条；标注解析模型全名
+        chat_label = ""
         try:
             chat_provider = self.context.get_using_provider(umo=umo)
             if chat_provider:
-                logger.info(
-                    f"[SmartForward] 转发文字内容将由当前对话模型解析 | "
-                    f"提供商: {_provider_label(chat_provider)}"
-                )
+                chat_label = _provider_label(chat_provider)
         except Exception as e:
-            logger.warning(
-                f"[SmartForward] 获取当前对话模型失败: {type(e).__name__}: {e}"
+            logger.warning(f"获取当前对话模型失败: {type(e).__name__}: {e}")
+
+        n_text = len(pending)
+        if direct_image_urls:
+            # 图片直通：文字与图片均由同一对话模型解析
+            logger.info(
+                f"已注入转发上下文（文字 {n_text} 段 + 图片 {len(direct_image_urls)} 张）"
+                f"| 解析模型: {chat_label or '未知'}"
+            )
+        elif caption_label:
+            # 图片转述：文字由对话模型解析，图片由转述模型描述
+            logger.info(
+                f"已注入转发上下文（文字 {n_text} 段 + 图片转述 {caption_count} 张）"
+                f"| 文字: {chat_label or '未知'} / 图片: {caption_label}"
+            )
+        else:
+            logger.info(
+                f"已注入转发上下文（文字 {n_text} 段）| 解析模型: {chat_label or '未知'}"
             )
         await self._history.write_forward_pair(umo, merged_text, "")
 
@@ -172,20 +190,16 @@ class SmartForward(Star):
         if not detect_result:
             return
 
-        logger.info(
-            f"[SmartForward] 检测到转发消息 | id={detect_result.forward_id} | 来源={detect_result.source.value}"
-        )
-
         # 去重检查
         if self._check_dedup(detect_result.forward_id, umo):
-            logger.info(
-                f"[SmartForward] 消息已处理过，跳过: {detect_result.forward_id[:20]}"
-            )
+            logger.debug(f"消息已处理过，跳过: {detect_result.forward_id[:20]}")
             return
 
         # 仅暂存（不解析），等待 LLM 触发时统一解析
         self._enqueue_pending(umo, event, detect_result)
-        logger.info("[SmartForward] 转发消息已暂存（按需解析，未消耗 Token）")
+        logger.info(
+            f"检测到转发消息，已暂存 | id={detect_result.forward_id} | 来源={detect_result.source.value}"
+        )
 
     # ─── 暂存队列 ─────────────────────────────────────────────
 
@@ -197,9 +211,7 @@ class SmartForward(Star):
         if len(queue) > _PENDING_MAX:
             dropped = queue.pop(0)
             self._remove_dedup(dropped[1].forward_id, umo)
-            logger.info(
-                f"[SmartForward] 暂存队列超限，淘汰最旧条目: {dropped[1].forward_id[:20]}"
-            )
+            logger.debug(f"暂存队列超限，淘汰最旧条目: {dropped[1].forward_id[:20]}")
 
     def _cleanup_expired_pending(self, umo: str):
         """惰性清理过期暂存条目（TTL 24h）"""
@@ -233,21 +245,22 @@ class SmartForward(Star):
 
     async def _process_pending(
         self, umo: str, pending: list
-    ) -> tuple[str | None, list[str]]:
+    ) -> tuple[str | None, list[str], str | None, int]:
         """逐条解析暂存转发并合并为注入文本。
 
         单条失败/为空：跳过该条并 _remove_dedup（允许重试），继续其余。
-        全部失败：返回 (None, [])（纯转发场景已在 on_llm_request 顶部吞掉）。
+        全部失败：返回 (None, [], None, 0)（纯转发场景已在 on_llm_request 顶部吞掉）。
 
         Args:
             umo: 统一消息来源标识
             pending: _drain_pending 返回的暂存条目列表
 
         Returns:
-            (合并后的用户消息文本, 直通图片 URL 列表)；全部失败时返回 (None, [])
+            (合并后的用户消息文本, 直通图片 URL 列表, 图片转述模型全名, 转述图片张数)；
+            全部失败时返回 (None, [], None, 0)
         """
         if not pending:
-            return None, []
+            return None, [], None, 0
 
         all_messages: list[ParsedMessage] = []
         all_image_urls: list[str] = []
@@ -274,13 +287,11 @@ class SmartForward(Star):
             # 注意：gather(return_exceptions=True) 可能返回 BaseException 子类
             # （如 CancelledError），其并非 Exception 子类，必须用 BaseException 判断
             if isinstance(result, BaseException):
-                logger.error(
-                    f"[SmartForward] 解析转发失败: {type(result).__name__}: {result}"
-                )
+                logger.error(f"解析转发失败: {type(result).__name__}: {result}")
                 self._remove_dedup(detect_result.forward_id, umo)
                 continue
             if not result.messages:
-                logger.info("[SmartForward] 转发内容为空，跳过")
+                logger.info("转发内容为空，跳过")
                 self._remove_dedup(detect_result.forward_id, umo)
                 continue
             any_success = True
@@ -288,21 +299,23 @@ class SmartForward(Star):
             all_image_urls.extend(result.image_urls)
 
         if not any_success:
-            return None, []
+            return None, [], None, 0
 
         # 图片处理：
         # - level 3（当前对话模型支持图片输入）→ 图片直通，不转述，原生发给模型
         # - 其他 level → 调用图片转述模型生成文字描述（开关关闭时返回占位符）
         image_descriptions: list[str] = []
         direct_image_urls: list[str] = []
+        caption_label: str | None = None
+        caption_count = 0
         if all_image_urls:
             caption_provider, caption_level = self._llm._resolve_caption_provider(umo)
             if caption_provider and caption_level == 3:
                 direct_image_urls = all_image_urls
-                logger.info(
-                    f"[SmartForward] 当前对话模型支持图片输入，图片直通不转述（{len(all_image_urls)} 张）"
-                )
             else:
+                caption_count = len(all_image_urls)
+                if caption_provider:
+                    caption_label = _provider_label(caption_provider)
                 caption_prompt = (
                     self.model_config.get("image_caption_prompt", "").strip()
                     or DEFAULT_IMAGE_CAPTION_PROMPT
@@ -315,9 +328,7 @@ class SmartForward(Star):
                         timeout=_CAPTION_TIMEOUT,
                     )
                 except Exception as e:
-                    logger.error(
-                        f"[SmartForward] 图片转述失败: {type(e).__name__}: {e}"
-                    )
+                    logger.error(f"图片转述失败: {type(e).__name__}: {e}")
                     image_descriptions = ["(图片)"] * len(all_image_urls)
 
         # 合并构建用户消息文本（多条转发合并为一段）
@@ -326,7 +337,7 @@ class SmartForward(Star):
         merged_text = self._llm.build_user_message_text(
             all_messages, image_descriptions, sender_name, is_group
         )
-        return merged_text, direct_image_urls
+        return merged_text, direct_image_urls, caption_label, caption_count
 
     # ─── 辅助方法 ─────────────────────────────────────────────
 
@@ -377,4 +388,4 @@ class SmartForward(Star):
         """插件终止时资源释放"""
         self._pending.clear()
         self._dedup_cache.clear()
-        logger.info("[SmartForward] 插件已停止")
+        logger.info("插件已停止")
