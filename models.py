@@ -15,7 +15,13 @@ IMAGE_NO_URL_PLACEHOLDER = "[图片:链接缺失]"
 VIDEO_PLACEHOLDER = "[视频]"
 FILE_PLACEHOLDER = "[文件]"
 
-DEFAULT_IMAGE_CAPTION_PROMPT = "请用中文简短描述这张图片的内容。"
+DEFAULT_IMAGE_CAPTION_PROMPT = (
+    "请用中文简洁描述这张图片的内容，作为聊天记录中该图片的转述。"
+    "若图片为聊天记录截图，请完整转写其中的文字内容；"
+    "若为表情包或梗图，请概括画面与传达的情绪；"
+    "若为其他图片，请描述画面主体与关键细节。"
+    "只输出描述文本本身，不要添加任何前缀、后缀或解释性语句。"
+)
 
 
 class ForwardSource(Enum):
