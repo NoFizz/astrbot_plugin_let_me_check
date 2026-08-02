@@ -33,6 +33,8 @@ from .models import (
 _GET_FORWARD_TIMEOUT = 30
 # 嵌套转发并行获取并发上限，防止对协议端造成瞬时压力
 _NESTED_FETCH_CONCURRENCY = 8
+# 单次解析过程中 get_forward_msg 协议调用总次数上限（防滥用/风控闸门）
+_MAX_FORWARD_FETCH = 32
 
 
 def detect_forward(event) -> ForwardDetectResult | None:
@@ -125,7 +127,7 @@ async def extract_messages(
     detect_result: ForwardDetectResult,
     max_messages: int = 200,
     parse_nested: bool = True,
-    max_depth: int = 3,
+    max_depth: int = 5,
 ) -> ProcessingResult:
     """提取合并转发中的消息内容。
 
@@ -144,7 +146,15 @@ async def extract_messages(
         return ProcessingResult(messages=[], image_urls=[])
 
     contexts, image_urls = await _parse_nodes(
-        event, messages, max_messages, parse_nested, max_depth, current_depth=0
+        event,
+        messages,
+        max_messages,
+        parse_nested,
+        max_depth,
+        current_depth=0,
+        _semaphore=None,
+        _seen=set(),
+        _fetch_count=[0],
     )
     return ProcessingResult(messages=contexts, image_urls=image_urls)
 
@@ -153,9 +163,22 @@ async def extract_messages(
 
 
 async def _resolve_raw_messages(
-    event, detect_result: ForwardDetectResult
+    event,
+    detect_result: ForwardDetectResult,
+    _seen: set | None = None,
+    _fetch_count: list[int] | None = None,
 ) -> list[dict]:
-    """获取原始消息字典列表（从内联数据或协议端 API）"""
+    """获取原始消息字典列表（从内联数据或协议端 API）。
+
+    Args:
+        event: AiocqhttpMessageEvent 实例（用于调用协议端 API）
+        detect_result: 检测结果
+        _seen: 整棵解析树共享的 forward_id 去重集合（防环）
+        _fetch_count: 整棵解析树共享的协议拉取计数 [count]（总闸门）
+
+    Returns:
+        消息字典列表，跳过/失败时返回空列表
+    """
     if isinstance(detect_result.forward_payload, dict):
         messages = _extract_messages_from_forward_data(detect_result.forward_payload)
         if messages:
@@ -163,6 +186,23 @@ async def _resolve_raw_messages(
 
     if not detect_result.forward_id:
         return []
+
+    # 防环去重：同一 forward_id 只拉取一次（预标记，防并发下重复拉取）
+    if _seen is not None:
+        if detect_result.forward_id in _seen:
+            logger.debug(f"嵌套转发已解析过，跳过: {detect_result.forward_id[:20]}")
+            return []
+        _seen.add(detect_result.forward_id)
+
+    # 总拉取闸门：达到上限停止（检查与递增必须在 await 前的同一同步段，
+    # 否则并发任务会全部通过闸门）
+    if _fetch_count is not None:
+        if _fetch_count[0] >= _MAX_FORWARD_FETCH:
+            logger.warning(
+                f"转发拉取次数已达上限（{_MAX_FORWARD_FETCH}），停止解析嵌套转发"
+            )
+            return []
+        _fetch_count[0] += 1
 
     client = event.bot
     try:
@@ -184,8 +224,13 @@ async def _parse_nodes(
     max_depth: int,
     current_depth: int,
     _semaphore: asyncio.Semaphore | None = None,
+    _seen: set | None = None,
+    _fetch_count: list[int] | None = None,
 ) -> tuple[list[ParsedMessage], list[str]]:
-    """解析消息节点列表，返回 (ParsedMessage 列表, 扁平化图片 URL 列表)"""
+    """解析消息节点列表，返回 (ParsedMessage 列表, 扁平化图片 URL 列表)
+
+    _seen/_fetch_count 为整棵解析树共享的去重集合与拉取计数（防环 + 总闸门）。
+    """
     if current_depth > max_depth:
         return [], []
 
@@ -193,7 +238,7 @@ async def _parse_nodes(
     image_urls: list[str] = []
     message_count = 0
 
-    # 第一遍：收集需要并行解析的嵌套转发
+    # 第一遍：收集需要并行解析的嵌套转发（已解析过的 id 不再收集，防环）
     nested_tasks: list[tuple[int, str]] = []  # (插入位置, nested_id)
 
     for node in messages:
@@ -239,7 +284,7 @@ async def _parse_nodes(
                     seg_type == "forward" and parse_nested and current_depth < max_depth
                 ):
                     nested_id = _extract_forward_id(seg_data)
-                    if nested_id:
+                    if nested_id and not (_seen is not None and nested_id in _seen):
                         nested_tasks.append((len(contexts), nested_id))
 
         content = "".join(text_parts).strip()
@@ -273,6 +318,8 @@ async def _parse_nodes(
                         max_depth,
                         current_depth + 1,
                         _semaphore,
+                        _seen,
+                        _fetch_count,
                     )
                     for _, nid in nested_tasks
                 ],
@@ -309,17 +356,29 @@ async def _resolve_nested(
     max_depth: int,
     depth: int,
     _semaphore: asyncio.Semaphore,
+    _seen: set | None = None,
+    _fetch_count: list[int] | None = None,
 ) -> tuple[list[ParsedMessage], list[str]]:
     """解析单个嵌套转发"""
     nested_detect = ForwardDetectResult(
         forward_id=nested_id, forward_payload=None, source=ForwardSource.COMPONENT
     )
     async with _semaphore:
-        raw_msgs = await _resolve_raw_messages(event, nested_detect)
+        raw_msgs = await _resolve_raw_messages(
+            event, nested_detect, _seen, _fetch_count
+        )
     if not raw_msgs:
         return [], []
     return await _parse_nodes(
-        event, raw_msgs, max_messages, parse_nested, max_depth, depth, _semaphore
+        event,
+        raw_msgs,
+        max_messages,
+        parse_nested,
+        max_depth,
+        depth,
+        _semaphore,
+        _seen,
+        _fetch_count,
     )
 
 

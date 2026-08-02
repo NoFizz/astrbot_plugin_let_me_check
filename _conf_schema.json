@@ -62,7 +62,7 @@
   "max_nested_depth": {
     "description": "最大嵌套深度",
     "type": "int",
-    "default": 3,
+    "default": 5,
     "hint": "解析嵌套合并转发的最大深度，防止无限递归。"
   },
   "model_config": {

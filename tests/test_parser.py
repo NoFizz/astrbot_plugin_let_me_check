@@ -233,10 +233,12 @@ def test_nested_fetch_concurrency_bounded(make_event):
             self.api = self
             self.active = 0
             self.max_active = 0
+            self.total_calls = 0
 
         async def call_action(self, action, **params):
             self.active += 1
             self.max_active = max(self.max_active, self.active)
+            self.total_calls += 1
             try:
                 await asyncio.sleep(0.02)
                 nid = str(params.get("id", ""))
@@ -274,5 +276,151 @@ def test_nested_fetch_concurrency_bounded(make_event):
                 del parser_mod._NESTED_FETCH_CONCURRENCY
             else:
                 parser_mod._NESTED_FETCH_CONCURRENCY = original
+
+    asyncio.run(scenario())
+
+
+def test_nested_forward_dedup_by_id(make_event):
+    """同一嵌套 forward_id 被多处引用：只拉取一次（防环去重），内容不重复插入。"""
+
+    class SameBot:
+        """无论请求哪个 id 都返回同一转发内容的协议端 FakeBot。"""
+
+        def __init__(self):
+            self.api = self
+            self.calls = []
+
+        async def call_action(self, action, **params):
+            nid = str(params.get("id", ""))
+            self.calls.append(nid)
+            return {
+                "messages": [
+                    {
+                        "sender": {"nickname": f"S{nid}"},
+                        "content": [_text_seg(f"same-{nid}")],
+                    }
+                ]
+            }
+
+    async def scenario():
+        # 两条外层消息引用同一个嵌套转发 id "dup-1"
+        payload = _forward_payload(
+            [
+                {"sender": {"nickname": "A"}, "content": [_text_seg("前")]},
+                {"sender": {"nickname": "B"}, "content": [{"type": "forward", "data": {"id": "dup-1"}}]},
+                {"sender": {"nickname": "C"}, "content": [{"type": "forward", "data": {"id": "dup-1"}}]},
+            ]
+        )
+        bot = SameBot()
+        event = make_event(segments=[Forward(data=payload)])
+        event.bot = bot
+        result = await extract_messages(event, detect_forward(event))
+        # dup-1 只被拉取一次
+        assert bot.calls.count("dup-1") == 1
+        # 内容只插入一份（dedup 后保留首个实例）
+        texts = [m.content for m in result.messages]
+        assert texts.count("same-dup-1") == 1
+
+    asyncio.run(scenario())
+
+
+def test_nested_forward_self_reference_no_infinite_loop(make_event):
+    """自引用嵌套转发（A 内含 A）：seen 去重保证不无限递归，正常返回。"""
+
+    class SelfBot:
+        """引用了自身 id 的协议端 FakeBot（返回的转发内容又包含自身）。"""
+
+        def __init__(self):
+            self.api = self
+            self.calls = []
+
+        async def call_action(self, action, **params):
+            nid = str(params.get("id", ""))
+            self.calls.append(nid)
+            # 返回内容中又嵌套引用自身
+            return {
+                "messages": [
+                    {
+                        "sender": {"nickname": f"S{nid}"},
+                        "content": [
+                            _text_seg(f"level-{nid}"),
+                            {"type": "forward", "data": {"id": nid}},
+                        ],
+                    }
+                ]
+            }
+
+    async def scenario():
+        payload = _forward_payload(
+            [
+                {"sender": {"nickname": "A"}, "content": [{"type": "forward", "data": {"id": "self-1"}}]},
+            ]
+        )
+        bot = SelfBot()
+        event = make_event(segments=[Forward(data=payload)])
+        event.bot = bot
+        result = await extract_messages(event, detect_forward(event))
+        # self-1 只被拉取一次
+        assert bot.calls.count("self-1") == 1
+        assert len(result.messages) >= 1
+
+    asyncio.run(scenario())
+
+
+def test_total_forward_fetch_capped(make_event):
+    """总 get_forward_msg 拉取次数受 _MAX_FORWARD_FETCH 上限约束，超限停止并 warning。"""
+
+    class ManyBot:
+        def __init__(self):
+            self.api = self
+            self.calls = 0
+
+        async def call_action(self, action, **params):
+            self.calls += 1
+            nid = str(params.get("id", ""))
+            return {
+                "messages": [
+                    {
+                        "sender": {"nickname": f"N{nid}"},
+                        "content": [_text_seg(f"nested-{nid}")],
+                    }
+                ]
+            }
+
+    async def scenario():
+        original = getattr(parser_mod, "_MAX_FORWARD_FETCH", None)
+        parser_mod._MAX_FORWARD_FETCH = 5  # 压到 5 便于测试
+        try:
+            # 10 个嵌套转发 → 若无闸门会拉 10 次
+            messages = [
+                {
+                    "sender": {"nickname": f"U{i}"},
+                    "content": [{"type": "forward", "data": {"id": f"n{i}"}}],
+                }
+                for i in range(10)
+            ]
+            bot = ManyBot()
+            event = make_event(segments=[Forward(data=_forward_payload(messages))])
+            event.bot = bot
+            result = await extract_messages(event, detect_forward(event))
+            assert bot.calls <= 5
+        finally:
+            if original is None:
+                del parser_mod._MAX_FORWARD_FETCH
+            else:
+                parser_mod._MAX_FORWARD_FETCH = original
+
+    asyncio.run(scenario())
+
+
+def test_default_nested_depth_is_five(make_event):
+    """extract_messages 默认 max_depth 为 5（加深嵌套解析能力）。"""
+
+    async def scenario():
+        # 通过签名默认值验证（不实际构造 5 层转发）
+        import inspect
+
+        sig = inspect.signature(extract_messages)
+        assert sig.parameters["max_depth"].default == 5
 
     asyncio.run(scenario())

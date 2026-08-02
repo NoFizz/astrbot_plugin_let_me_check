@@ -85,7 +85,7 @@ class let_me_check(Star):
         self.private_chat = self.config.get("private_chat", {})
         self.max_messages = self.config.get("max_messages", 200)
         self.parse_nested_forward = self.config.get("parse_nested_forward", True)
-        self.max_nested_depth = self.config.get("max_nested_depth", 3)
+        self.max_nested_depth = self.config.get("max_nested_depth", 5)
         self.model_config = self.config.get("model_config", {})
 
     # ─── 事件处理 ─────────────────────────────────────────────

@@ -18,7 +18,7 @@ def make_plugin():
         "private_chat": {"enable": True, "whitelist_enable": False, "whitelist": []},
         "max_messages": 200,
         "parse_nested_forward": True,
-        "max_nested_depth": 3,
+        "max_nested_depth": 5,
         "model_config": {
             "image_caption_concurrency": 5,
             "image_caption_prompt": "",
