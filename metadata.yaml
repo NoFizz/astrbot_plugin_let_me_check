@@ -11,8 +11,5 @@ tags:
   - "智能分析"
 license: "AGPL-3.0"
 python_version: ">=3.10"
-astrbot_version: ">=4.26.0"
-support_platforms:
-  - "aiocqhttp"
 display_name: "让我康康"
 short_desc: "收到QQ合并转发消息时，自动解析内容并结合上下文智能回复。"
