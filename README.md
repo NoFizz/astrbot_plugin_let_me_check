@@ -8,7 +8,6 @@
   <img src="https://img.shields.io/badge/version-2.2.0-blue?style=flat" alt="version">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat" alt="python">
-  <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.17.0-orange?style=flat" alt="AstrBot version">
 </p>
 
 自动解析QQ合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用LLM生成自然回复，支持群聊/私聊独立开关与白名单控制。
@@ -29,7 +28,6 @@
 - [配置说明](#配置说明)
 - [使用示例](#使用示例)
 - [环境要求](#环境要求)
-- [支持平台](#支持平台)
 - [数据存储与隐私](#数据存储与隐私)
 - [故障排查](#故障排查)
 - [维护者](#维护者)
@@ -141,14 +139,7 @@
 ## 环境要求
 
 - Python >= 3.10
-- AstrBot >= 4.17.0
 - 无第三方依赖（使用 AstrBot 内置模块）
-
-## 支持平台
-
-仅支持 **aiocqhttp**（OneBot v11）。
-
-原因：转发消息的解析依赖协议端的 `get_forward_msg` API，该 API 为 OneBot v11 特有。其他平台收到消息会自动跳过。
 
 ## 数据存储与隐私
 
@@ -162,7 +153,6 @@
 |------|----------|----------|
 | 转发消息未被解析 | 协议端不支持 `get_forward_msg` API | 使用 NapCat、Lagrange 等支持的协议端 |
 | 图片转述不生效 | 未配置可用的多模态模型 | 在 AstrBot 配置中设置"默认图片转述模型"或插件内指定 |
-| 其他平台无效 | 仅支持 aiocqhttp | 其他平台会自动跳过，属正常行为 |
 | 发送转发后机器人不回复 | 按需解析模式下纯转发不触发 LLM，属正常行为 | 在转发后继续发送一条消息（如 @机器人 提问）触发解析 |
 
 ## 维护者

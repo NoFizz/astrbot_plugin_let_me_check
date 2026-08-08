@@ -13,6 +13,3 @@ license: "AGPL-3.0"
 python_version: ">=3.10"
 display_name: "让我康康"
 short_desc: "收到QQ合并转发消息时，自动解析内容并结合上下文智能回复。"
-astrbot_version: ">=4.17.0"
-support_platforms:
-  - aiocqhttp
