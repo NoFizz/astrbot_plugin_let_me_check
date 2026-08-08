@@ -1,20 +1,40 @@
 <h1 align="center">让我康康</h1>
 
 <p align="center">
-  <img src="./logo.png" alt="让我康康" width="128" height="128">
+  <img src="./logo.png" width="128" height="128" alt="让我康康">
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-2.2.0-blue?style=flat" alt="version">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat" alt="python">
+  <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.17.0-orange?style=flat" alt="AstrBot version">
 </p>
 
-<p align="center">自动解析 QQ 合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用 LLM 生成自然回复，支持群聊/私聊独立开关与白名单控制。</p>
+自动解析QQ合并转发消息（支持嵌套转发和图片转述），结合会话上下文调用LLM生成自然回复，支持群聊/私聊独立开关与白名单控制。
 
 <p align="center">
   <img src="https://count.getloli.com/@astrbot_plugin_let_me_check?theme=moebooru" alt="Moe Counter">
 </p>
+
+## 功能简介
+
+收到 QQ 合并转发消息时，本插件会自动展开其中的聊天记录（转发里再套转发也能一层层解开），再结合当前对话的上下文让 LLM 看懂内容，生成自然的回复。转发消息里的图片也会自动转成文字说明，机器人不用点开图片也知道大家在聊什么。
+
+## 内容列表
+
+- [功能简介](#功能简介)
+- [功能特性](#功能特性)
+- [安装](#安装)
+- [配置说明](#配置说明)
+- [使用示例](#使用示例)
+- [环境要求](#环境要求)
+- [支持平台](#支持平台)
+- [数据存储与隐私](#数据存储与隐私)
+- [故障排查](#故障排查)
+- [维护者](#维护者)
+- [如何贡献](#如何贡献)
+- [许可证](#许可证)
 
 ## 功能特性
 
@@ -69,27 +89,27 @@
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| 启用 | bool | true | 是否对该类型会话启用转发解析 |
-| 启用白名单 | bool | false | 开启后仅白名单中的会话生效 |
-| 白名单 | list | [] | UMO 列表，格式如 `aiocqhttp:GroupMessage:123456` |
+| 启用 `enable` | bool | true | 是否对该类型会话启用转发解析 |
+| 启用白名单 `whitelist_enable` | bool | false | 开启后仅白名单中的会话生效 |
+| 白名单 `whitelist` | list | [] | UMO 列表，格式如 `aiocqhttp:GroupMessage:123456` |
 
 ### 解析设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| 最大处理消息数 | int | 200 | 单次分析的最大聊天记录条数 |
-| 解析嵌套转发 | bool | true | 是否递归解析嵌套的合并转发 |
-| 最大嵌套深度 | int | 5 | 嵌套解析的最大递归层数 |
+| 最大处理消息数 `max_messages` | int | 200 | 单次分析的最大聊天记录条数 |
+| 解析嵌套转发 `parse_nested_forward` | bool | true | 是否递归解析嵌套的合并转发 |
+| 最大嵌套深度 `max_nested_depth` | int | 5 | 嵌套解析的最大递归层数 |
 
 ### 模型配置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| 对话模型提供商 | string | 空 | 留空使用当前配置文件中的"默认对话模型" |
-| 图片转述模型提供商 | string | 空 | 留空则依次使用"默认图片转述模型"→"当前对话模型（需支持图片输入）"→"群聊图片转述模型"；完整回退链见下方"图片转述回退链" |
-| 图片转述提示词 | text | 请用中文简洁描述这张图片的内容，作为聊天记录中该图片的转述。若图片为聊天记录截图，请完整转写其中的文字内容；若为表情包或梗图，请概括画面与传达的情绪；若为其他图片，请描述画面主体与关键细节。只输出描述文本本身，不要添加任何前缀、后缀或解释性语句。 | 发送给图片转述模型的提示词 |
-| 启用图片转述 | bool | true | 开启后调用图片转述模型生成文字描述；关闭后图片仅显示为占位符（当前对话模型支持图片输入时直通发送，不受此开关控制） |
-| 图片转述并发数 | int | 5 | 同时调用图片转述模型的最大并发数 |
+| 对话模型提供商 `provider_id` | string | 空 | 留空使用当前配置文件中的"默认对话模型" |
+| 图片转述模型提供商 `image_caption_provider_id` | string | 空 | 留空则依次使用"默认图片转述模型"→"当前对话模型（需支持图片输入）"→"群聊图片转述模型"；完整回退链见下方"图片转述回退链" |
+| 图片转述提示词 `image_caption_prompt` | text | 请用中文简洁描述这张图片的内容，作为聊天记录中该图片的转述。若图片为聊天记录截图，请完整转写其中的文字内容；若为表情包或梗图，请概括画面与传达的情绪；若为其他图片，请描述画面主体与关键细节。只输出描述文本本身，不要添加任何前缀、后缀或解释性语句。 | 发送给图片转述模型的提示词 |
+| 启用图片转述 `image_caption_enabled` | bool | true | 开启后调用图片转述模型生成文字描述；关闭后图片仅显示为占位符（当前对话模型支持图片输入时直通发送，不受此开关控制） |
+| 图片转述并发数 `image_caption_concurrency` | int | 5 | 同时调用图片转述模型的最大并发数 |
 
 ### 图片转述回退链
 
@@ -118,6 +138,12 @@
 
 **私聊直发纯转发**：纯转发消息本身不触发 LLM（已吞掉该次调用）；用户后续发送任意消息时，自动带上该转发一并解析。
 
+## 环境要求
+
+- Python >= 3.10
+- AstrBot >= 4.17.0
+- 无第三方依赖（使用 AstrBot 内置模块）
+
 ## 支持平台
 
 仅支持 **aiocqhttp**（OneBot v11）。
@@ -139,12 +165,14 @@
 | 其他平台无效 | 仅支持 aiocqhttp | 其他平台会自动跳过，属正常行为 |
 | 发送转发后机器人不回复 | 按需解析模式下纯转发不触发 LLM，属正常行为 | 在转发后继续发送一条消息（如 @机器人 提问）触发解析 |
 
-## 许可证
-
-本项目基于 [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 许可证开源。
-
-## 作者
+## 维护者
 
 **NoFizz** · [GitHub](https://github.com/NoFizz)
 
-如遇问题或有功能建议，欢迎提交 [Issue](https://github.com/NoFizz/astrbot_plugin_let_me_check/issues)。
+## 如何贡献
+
+欢迎提交 [Issue](https://github.com/NoFizz/astrbot_plugin_let_me_check/issues) 反馈问题或功能建议，也接受 [Pull Request](https://github.com/NoFizz/astrbot_plugin_let_me_check/pulls)。
+
+## 许可证
+
+本项目基于 [AGPL-3.0](LICENSE) 许可证开源。
