@@ -3,6 +3,8 @@ desc: 自动解析QQ合并转发消息（支持嵌套转发和图片转述），
 version: "2.2.1"
 author: NoFizz
 repo: https://github.com/NoFizz/astrbot_plugin_let_me_check
+support_platforms:
+  - aiocqhttp
 tags:
   - "工具"
   - "LLM"
