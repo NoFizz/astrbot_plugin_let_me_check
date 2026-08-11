@@ -7,7 +7,8 @@
 - 递归解析嵌套转发
 - 提取结构化消息列表
 
-纯逻辑模块，无副作用，可独立测试。
+解析服务模块：除协议端读取（get_forward_msg）与日志外不写任何状态；
+不依赖 AstrBot 实例，可通过 stub 独立测试。
 """
 
 import asyncio
@@ -106,7 +107,7 @@ def detect_forward(event) -> ForwardDetectResult | None:
                             break
 
     except Exception as e:
-        logger.error(f"转发检测异常: {type(e).__name__}: {e}")
+        logger.error(f"[让我康康] 转发检测异常: {type(e).__name__}: {e}")
         return None
 
     if not forward_id and not forward_payload:
@@ -128,6 +129,7 @@ async def extract_messages(
     max_messages: int = 200,
     parse_nested: bool = True,
     max_depth: int = 5,
+    fetch_semaphore: asyncio.Semaphore | None = None,
 ) -> ProcessingResult:
     """提取合并转发中的消息内容。
 
@@ -137,11 +139,19 @@ async def extract_messages(
         max_messages: 最大处理消息数
         parse_nested: 是否解析嵌套转发
         max_depth: 最大嵌套深度
+        fetch_semaphore: 跨多次解析共享的协议拉取信号量（None 时内部新建），
+            用于限制同一批次并行解析的总并发
 
     Returns:
         ProcessingResult 包含结构化消息列表和扁平化图片 URL 列表
     """
-    messages = await _resolve_raw_messages(event, detect_result)
+    # 共享解析状态：顶层转发与嵌套转发共用去重集合与拉取计数。
+    # 顶层 ID 先占用 _seen、顶层协议拉取计入 _MAX_FORWARD_FETCH，
+    # 防止顶层内容再次引用自身时被重复拉取。
+    _seen: set[str] = set()
+    _fetch_count: list[int] = [0]
+
+    messages = await _resolve_raw_messages(event, detect_result, _seen, _fetch_count)
     if not messages:
         return ProcessingResult(messages=[], image_urls=[])
 
@@ -152,9 +162,9 @@ async def extract_messages(
         parse_nested,
         max_depth,
         current_depth=0,
-        _semaphore=None,
-        _seen=set(),
-        _fetch_count=[0],
+        _semaphore=fetch_semaphore,
+        _seen=_seen,
+        _fetch_count=_fetch_count,
     )
     return ProcessingResult(messages=contexts, image_urls=image_urls)
 
@@ -190,7 +200,9 @@ async def _resolve_raw_messages(
     # 防环去重：同一 forward_id 只拉取一次（预标记，防并发下重复拉取）
     if _seen is not None:
         if detect_result.forward_id in _seen:
-            logger.debug(f"嵌套转发已解析过，跳过: {detect_result.forward_id[:20]}")
+            logger.debug(
+                f"[让我康康] 嵌套转发已解析过，跳过: {detect_result.forward_id[:20]}"
+            )
             return []
         _seen.add(detect_result.forward_id)
 
@@ -199,7 +211,7 @@ async def _resolve_raw_messages(
     if _fetch_count is not None:
         if _fetch_count[0] >= _MAX_FORWARD_FETCH:
             logger.warning(
-                f"转发拉取次数已达上限（{_MAX_FORWARD_FETCH}），停止解析嵌套转发"
+                f"[让我康康] 转发拉取次数已达上限（{_MAX_FORWARD_FETCH}），停止解析嵌套转发"
             )
             return []
         _fetch_count[0] += 1
@@ -212,7 +224,7 @@ async def _resolve_raw_messages(
         )
         return _extract_messages_from_forward_data(forward_data)
     except Exception as e:
-        logger.error(f"获取合并转发失败: {e}")
+        logger.error(f"[让我康康] 获取合并转发失败: {e}")
         return []
 
 
@@ -330,7 +342,7 @@ async def _parse_nodes(
             for i, (insert_pos, _) in enumerate(nested_tasks):
                 result = nested_results[i]
                 if isinstance(result, Exception):
-                    logger.warning(f"嵌套解析失败: {result}")
+                    logger.warning(f"[让我康康] 嵌套解析失败: {result}")
                     continue
                 nested_contexts, nested_images = result
                 if nested_contexts:

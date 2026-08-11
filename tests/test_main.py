@@ -139,7 +139,8 @@ def test_pure_forward_swallowed(make_event):
 
 
 def test_trigger_injects_merged_pending(make_event):
-    """含实质内容的消息触发：取出全部暂存并合并注入（mark_as_temp 生效）。"""
+    """含实质内容的消息触发：取出全部暂存并合并注入（文字 part 不标 temp，
+    交由 AstrBot 随本轮历史持久化，即"会话记忆"契约）。"""
     plugin = make_plugin()
 
     async def scenario():
@@ -154,7 +155,7 @@ def test_trigger_injects_merged_pending(make_event):
 
         assert len(req.extra_user_content_parts) == 1
         part = req.extra_user_content_parts[0]
-        assert part._no_save is True  # mark_as_temp() applied
+        assert part._no_save is False  # 文字 part 必须被 AstrBot 保存（P0-01 契约）
         assert "<forwarded_message_context>" in part.text
         assert "转发内容" in part.text
         assert umo not in plugin._pending  # 注入后清空暂存
@@ -328,6 +329,249 @@ def test_direct_image_injection_when_chat_model_multimodal(make_event):
         assert len(img_parts) == 1
         assert img_parts[0].image_url.url == "https://example.com/a.jpg"
         assert img_parts[0]._no_save is True
+
+    asyncio.run(scenario())
+
+
+def test_cross_pending_share_fetch_semaphore(make_event):
+    """多条暂存转发并行解析时共享同一协议拉取信号量：
+    嵌套拉取峰值并发不超过 _NESTED_FETCH_CONCURRENCY（而非 条数 × 上限）。"""
+    import astrbot_plugin_let_me_check.main as main_mod
+
+    class CountingBot:
+        """跟踪最大并发 call_action 调用数的协议端 FakeBot。"""
+
+        def __init__(self):
+            self.api = self
+            self.active = 0
+            self.max_active = 0
+
+        async def call_action(self, action, **params):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.02)
+                nid = str(params.get("id", ""))
+                return {
+                    "messages": [
+                        {
+                            "sender": {"nickname": f"N{nid}"},
+                            "content": [_text_seg(f"nested-{nid}")],
+                        }
+                    ]
+                }
+            finally:
+                self.active -= 1
+
+    def _nested_payload(i):
+        # 每条转发内联 4 个嵌套引用 → 顶层不走协议拉取，全部调用均为嵌套拉取
+        return {
+            "messages": [
+                {
+                    "sender": {"nickname": f"U{i}"},
+                    "content": [
+                        {"type": "text", "data": {"text": f"m{i}"}},
+                        {"type": "forward", "data": {"id": f"n-{i}-0"}},
+                        {"type": "forward", "data": {"id": f"n-{i}-1"}},
+                        {"type": "forward", "data": {"id": f"n-{i}-2"}},
+                        {"type": "forward", "data": {"id": f"n-{i}-3"}},
+                    ],
+                }
+            ]
+        }
+
+    async def scenario():
+        original = getattr(main_mod, "_NESTED_FETCH_CONCURRENCY", None)
+        main_mod._NESTED_FETCH_CONCURRENCY = 2
+        try:
+            umo = "aiocqhttp:GroupMessage:123456"
+            plugin = make_plugin()
+            bots = []
+            for i in range(4):  # 4 条 pending × 4 嵌套 = 16 次嵌套拉取
+                bot = CountingBot()
+                bots.append(bot)
+                event = make_event(
+                    segments=[Forward(data=_nested_payload(i))], umo=umo
+                )
+                event.bot = bot
+                await plugin.on_message(event)
+            trigger = make_event(segments=[Text(text="总结")], umo=umo)
+            req = ProviderRequest()
+            await plugin.on_llm_request(trigger, req)
+            # 共享信号量将嵌套拉取总并发压到 2，而不是 4 条 × 单树上限
+            assert max(b.max_active for b in bots) <= 2
+            assert umo not in plugin._pending
+        finally:
+            if original is None:
+                del main_mod._NESTED_FETCH_CONCURRENCY
+            else:
+                main_mod._NESTED_FETCH_CONCURRENCY = original
+
+    asyncio.run(scenario())
+
+
+def test_invalid_config_values_fall_back(make_event):
+    """非法配置类型/范围在 _load_config 中被安全转换或回退默认值（不抛异常）。"""
+    config = {
+        "group_chat": {"enable": True, "whitelist_enable": False, "whitelist": []},
+        "private_chat": {"enable": True, "whitelist_enable": False, "whitelist": []},
+        "max_messages": "200",  # 字符串 → 转换
+        "parse_nested_forward": "false",  # 字符串 bool → 回退 True
+        "max_nested_depth": -3,  # 负数 → 裁剪到下限
+        "model_config": {
+            "image_caption_provider_id": None,  # 非字符串 → 回退 ""
+            "image_caption_prompt": 123,  # 非字符串 → 回退 ""
+            "image_caption_concurrency": "3",  # LLMService 内 int 转换
+            "image_caption_enabled": True,
+        },
+    }
+    plugin = let_me_check(SimpleNamespace(), config)
+    assert plugin.max_messages == 200
+    assert plugin.parse_nested_forward is True
+    assert plugin.max_nested_depth == 0
+    assert plugin.model_config["image_caption_provider_id"] == ""
+    assert plugin.model_config["image_caption_prompt"] == ""
+    assert plugin._llm._caption_concurrency == 3
+
+
+def test_extreme_config_values_clamped(make_event):
+    """超大/非数字配置裁剪到合理范围。"""
+    plugin = let_me_check(
+        SimpleNamespace(),
+        {
+            "max_messages": 99999,
+            "max_nested_depth": "abc",
+            "model_config": {"image_caption_provider_id": ["bad"], "image_caption_prompt": None},
+        },
+    )
+    assert plugin.max_messages == 2000  # 裁剪到上限
+    assert plugin.max_nested_depth == 5  # 非数字 → 回退默认
+    assert plugin.model_config["image_caption_provider_id"] == ""
+    assert plugin.model_config["image_caption_prompt"] == ""
+
+
+def test_injected_text_survives_core_save_filter(make_event):
+    """P0-01 回归：模拟 AstrBot Core 保存历史时的 _no_save 过滤
+    （dump_messages_with_checkpoints 丢弃 temp part），断言转发文本 part 存活、
+    直通图片 part 被滤除——即转发内容随本轮历史持久化。"""
+    plugin = make_plugin()
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        fwd = make_event(
+            segments=[Forward(id="fwd-1")], umo=umo, bot_payload=_fwd_payload("转发内容")
+        )
+        await plugin.on_message(fwd)
+        trigger = make_event(segments=[Text(text="看看")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+
+        # 模拟 Core 保存过滤：丢弃 _no_save 的 part
+        saved_parts = [
+            p for p in req.extra_user_content_parts if not getattr(p, "_no_save", False)
+        ]
+        # 文字 part 必须存活（其 _no_save 为 False）
+        assert len(saved_parts) == 1
+        assert "<forwarded_message_context>" in saved_parts[0].text
+        assert "转发内容" in saved_parts[0].text
+        # 图片直通 part 仍为 temp（不写入历史）
+        img_parts = [p for p in req.extra_user_content_parts if getattr(p, "_no_save", False)]
+        assert all(getattr(p, "_no_save", False) for p in img_parts)
+
+    asyncio.run(scenario())
+
+
+def test_total_budget_truncates_by_chars(make_event):
+    """总字符预算：超预算部分按入队顺序截断，文本末尾追加固定截断标记。"""
+    plugin = make_plugin()
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        for i in range(3):
+            ev = make_event(
+                segments=[Forward(id=f"fwd-{i}")],
+                umo=umo,
+                bot_payload=_fwd_payload(f"内容{i}" + "长" * 9000),
+            )
+            await plugin.on_message(ev)
+        trigger = make_event(segments=[Text(text="总结")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+
+        text = req.extra_user_content_parts[0].text
+        # 20000 字符预算：保留前 2 条（约 18000 字符），第 3 条截断
+        assert "内容0" in text
+        assert "内容1" in text
+        assert "内容2" not in text
+        assert "[内容已截断" in text
+        assert umo not in plugin._pending
+
+    asyncio.run(scenario())
+
+
+def test_total_budget_truncates_by_images(make_event):
+    """总图片预算：图片数超上限时按入队顺序截断，转述图片数受预算约束。"""
+    plugin = make_plugin()
+    # 补齐 _resolve_caption_provider 需要的 context 桩（无可用转述模型 → 占位符）
+    plugin.context.get_provider_by_id = lambda pid: None
+    plugin.context.get_config = lambda umo=None: {
+        "provider_settings": {},
+        "provider_ltm_settings": {},
+    }
+
+    def _img_payload(i):
+        # 每条消息 2 张图片，共 12 条 = 24 张 > 20 张上限
+        return {
+            "messages": [
+                {
+                    "sender": {"nickname": "甲"},
+                    "content": [
+                        {"type": "image", "data": {"url": f"https://img.example.com/{i}-{j}.jpg"}}
+                        for j in range(2)
+                    ],
+                }
+                for i in range(12)
+            ]
+        }
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        ev = make_event(segments=[Forward(data=_img_payload(0))], umo=umo)
+        await plugin.on_message(ev)
+        trigger = make_event(segments=[Text(text="总结")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+
+        text = req.extra_user_content_parts[0].text
+        # 20 张图片预算：保留 10 条消息 × 2 张；无可用转述模型 → 占位符
+        assert text.count("[图片: (图片)]") == 20
+        assert "[内容已截断" in text
+        assert umo not in plugin._pending
+
+    asyncio.run(scenario())
+
+
+def test_total_budget_under_limit_no_marker(make_event):
+    """预算内：不追加截断标记，全部内容保留。"""
+    plugin = make_plugin()
+
+    async def scenario():
+        umo = "aiocqhttp:GroupMessage:123456"
+        for i in range(2):
+            ev = make_event(
+                segments=[Forward(id=f"fwd-{i}")],
+                umo=umo,
+                bot_payload=_fwd_payload(f"短内容{i}"),
+            )
+            await plugin.on_message(ev)
+        trigger = make_event(segments=[Text(text="总结")], umo=umo)
+        req = ProviderRequest()
+        await plugin.on_llm_request(trigger, req)
+
+        text = req.extra_user_content_parts[0].text
+        assert "短内容0" in text
+        assert "短内容1" in text
+        assert "[内容已截断" not in text
 
     asyncio.run(scenario())
 

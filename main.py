@@ -1,5 +1,5 @@
 """
-让我康康 v2.2.0 - AstrBot 合并转发消息智能分析插件
+让我康康 v2.2.1 - AstrBot 合并转发消息智能分析插件
 
 功能：
 - 按需解析：收到合并转发消息仅暂存（零 Token 消耗），LLM 触发时统一解析注入
@@ -8,7 +8,7 @@
 - 群聊/私聊独立开关与白名单控制
 
 作者: NoFizz
-版本: 2.2.0
+版本: 2.2.1
 许可证: AGPL-3.0
 """
 
@@ -22,7 +22,6 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
-from .history import HistoryManager
 from .llm_service import LLMService, _provider_label
 from .models import (
     DEFAULT_IMAGE_CAPTION_PROMPT,
@@ -30,7 +29,7 @@ from .models import (
     ParsedMessage,
     ProcessingResult,
 )
-from .parser import detect_forward, extract_messages
+from .parser import _NESTED_FETCH_CONCURRENCY, detect_forward, extract_messages
 
 # 平台适配检查
 try:
@@ -48,13 +47,62 @@ _PENDING_MAX = 10  # 每会话暂存上限
 _PENDING_TTL = 86400  # 暂存有效期 24h（秒）
 _EXTRACT_TIMEOUT = 30  # 单条转发解析超时
 _CAPTION_TIMEOUT = 120  # 图片转述超时
+# 单次触发注入的总内容预算（内部常量，待实测后再考虑暴露为配置项）
+_MAX_TOTAL_CHARS = 20000  # 合并文本总字符上限
+_MAX_TOTAL_IMAGES = 20  # 直通/转述图片总数上限
+
+
+def _apply_content_budget(
+    messages: list[ParsedMessage],
+    image_urls: list[str],
+    max_chars: int,
+    max_images: int,
+) -> tuple[list[ParsedMessage], list[str], bool]:
+    """按入队顺序应用总内容预算，返回 (保留消息, 保留图片URL, 是否截断)。
+
+    字符预算按 sender + content 累计；图片预算按消息的 image_count 累计，
+    图片 URL 与消息顺序对齐切分。某条消息超出剩余预算时，其后全部截断；
+    首条即使单独超预算也强制保留（保证注入非空，图片可能被舍弃）。
+
+    Args:
+        messages: 解析出的全部消息（已按入队顺序合并）
+        image_urls: 与 messages 顺序对齐的扁平化图片 URL 列表
+        max_chars: 总字符上限
+        max_images: 总图片数上限
+
+    Returns:
+        (保留的消息列表, 保留的图片 URL 列表, 是否发生截断)
+    """
+    kept_messages: list[ParsedMessage] = []
+    kept_urls: list[str] = []
+    total_chars = 0
+    total_images = 0
+    url_idx = 0
+    for msg in messages:
+        msg_urls = image_urls[url_idx : url_idx + msg.image_count]
+        url_idx += msg.image_count
+        msg_chars = len(msg.sender) + len(msg.content)
+        if (kept_messages and total_chars + msg_chars > max_chars) or (
+            total_images + msg.image_count > max_images
+        ):
+            break
+        kept_messages.append(msg)
+        kept_urls.extend(msg_urls)
+        total_chars += msg_chars
+        total_images += msg.image_count
+    else:
+        return kept_messages, kept_urls, False
+    if not kept_messages:
+        kept_messages = [messages[0]]
+        kept_urls = []
+    return kept_messages, kept_urls, True
 
 
 @register(
     "let_me_check",
     "NoFizz",
     "智能分析QQ合并转发消息，支持群聊/私聊独立开关与白名单，按需解析注入会话上下文",
-    "2.2.0",
+    "2.2.1",
     "https://github.com/NoFizz/astrbot_plugin_let_me_check",
 )
 class let_me_check(Star):
@@ -67,7 +115,6 @@ class let_me_check(Star):
 
         # 服务模块
         self._llm = LLMService(context, self.model_config)
-        self._history = HistoryManager(context)
 
         # 去重缓存
         self._dedup_cache: dict[str, float] = {}
@@ -80,13 +127,60 @@ class let_me_check(Star):
         ] = {}
 
     def _load_config(self):
-        """加载配置项"""
+        """加载配置项。
+
+        对运行时类型与范围做防御性校验（用户配置可能被迁移、手工编辑污染），
+        非法值回退默认值并记 warning，保证下游比较/字符串操作不抛异常。
+        """
         self.group_chat = self.config.get("group_chat", {})
         self.private_chat = self.config.get("private_chat", {})
-        self.max_messages = self.config.get("max_messages", 200)
-        self.parse_nested_forward = self.config.get("parse_nested_forward", True)
-        self.max_nested_depth = self.config.get("max_nested_depth", 5)
-        self.model_config = self.config.get("model_config", {})
+        self.max_messages = self._clamp_int(
+            self.config.get("max_messages", 200), default=200, minimum=1, maximum=2000
+        )
+        raw_nested = self.config.get("parse_nested_forward", True)
+        if not isinstance(raw_nested, bool):
+            logger.warning(
+                f"[让我康康] parse_nested_forward 配置值 {raw_nested!r} 不是布尔值，已回退为 True"
+            )
+            raw_nested = True
+        self.parse_nested_forward = raw_nested
+        self.max_nested_depth = self._clamp_int(
+            self.config.get("max_nested_depth", 5), default=5, minimum=0, maximum=10
+        )
+        self.model_config = self._load_model_config()
+
+    def _clamp_int(self, value, default: int, minimum: int, maximum: int) -> int:
+        """将配置值安全转换为 int 并裁剪到 [minimum, maximum]，失败时回退默认值。"""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[让我康康] 配置值 {value!r} 不是整数，已回退到默认值 {default}"
+            )
+            return default
+        if parsed < minimum or parsed > maximum:
+            logger.warning(
+                f"[让我康康] 配置值 {value!r} 超出范围 [{minimum}, {maximum}]，已裁剪"
+            )
+            return max(minimum, min(maximum, parsed))
+        return parsed
+
+    def _load_model_config(self) -> dict:
+        """读取模型配置，保证结构为 dict 且字符串项类型正确。"""
+        raw = self.config.get("model_config", {})
+        if not isinstance(raw, dict):
+            logger.warning(
+                f"[让我康康] model_config 配置值 {raw!r} 不是对象，已回退为空"
+            )
+            raw = {}
+        mc = dict(raw)
+        for key in ("image_caption_provider_id", "image_caption_prompt"):
+            if not isinstance(mc.get(key), str):
+                logger.warning(
+                    f"[让我康康] model_config.{key} 配置值 {mc.get(key)!r} 不是字符串，已回退为空"
+                )
+                mc[key] = ""
+        return mc
 
     # ─── 事件处理 ─────────────────────────────────────────────
 
@@ -111,7 +205,7 @@ class let_me_check(Star):
         # 纯转发：中止本次 LLM 调用，转发已由 on_message 入队
         if self._is_pure_forward(event):
             event.stop_event()
-            logger.info("纯转发消息，中止本次 LLM 调用（等待后续消息触发）")
+            logger.info("[让我康康] 纯转发消息，中止本次 LLM 调用（等待后续消息触发）")
             return
 
         # 有实质内容 → 触发解析：取出全部暂存
@@ -126,18 +220,23 @@ class let_me_check(Star):
             caption_count,
         ) = await self._process_pending(umo, pending)
         if not merged_text:
-            logger.error("全部暂存转发解析失败，跳过注入")
+            logger.error("[让我康康] 全部暂存转发解析失败，跳过注入")
             return
 
         from astrbot.core.agent.message import ImageURLPart, TextPart
 
-        # 注入（mark_as_temp 防止主管道二次持久化，
-        # 转发内容已由插件通过 write_forward_pair 写入会话历史）
+        # 注入：
+        # - 文字 part 不标 temp：AstrBot 在 LLM 完成后整体保存本轮历史时，
+        #   会过滤 _no_save 内容并保留其余内容——转发文本随用户消息持久化，
+        #   即 README 承诺的"会话记忆"（Core 保存时机晚于插件侧任何写入，
+        #   插件自行写库会被其整体覆写，故不再使用 write_forward_pair）。
+        # - 图片 part 标 temp：直通图片 URL 仅本次请求可见，不写入历史
+        #   （避免历史膨胀与后续请求重复下载）。
         # 文字与图片同请求注入，一并交给主管道模型解析（不分开调用）
         req.extra_user_content_parts.append(
             TextPart(
                 text=f"<forwarded_message_context>\n{merged_text}\n</forwarded_message_context>"
-            ).mark_as_temp()
+            )
         )
         # 图片直通：当前对话模型支持图片输入时，图片原生随请求发给模型（无需转述）
         for url in direct_image_urls:
@@ -152,26 +251,25 @@ class let_me_check(Star):
             if chat_provider:
                 chat_label = _provider_label(chat_provider)
         except Exception as e:
-            logger.warning(f"获取当前对话模型失败: {type(e).__name__}: {e}")
+            logger.warning(f"[让我康康] 获取当前对话模型失败: {type(e).__name__}: {e}")
 
         n_text = len(pending)
         if direct_image_urls:
             # 图片直通：文字与图片均由同一对话模型解析
             logger.info(
-                f"已注入转发上下文（文字 {n_text} 段 + 图片 {len(direct_image_urls)} 张）"
+                f"[让我康康] 已注入转发上下文（文字 {n_text} 段 + 图片 {len(direct_image_urls)} 张）"
                 f"| 解析模型: {chat_label or '未知'}"
             )
         elif caption_label:
             # 图片转述：文字由对话模型解析，图片由转述模型描述
             logger.info(
-                f"已注入转发上下文（文字 {n_text} 段 + 图片转述 {caption_count} 张）"
+                f"[让我康康] 已注入转发上下文（文字 {n_text} 段 + 图片转述 {caption_count} 张）"
                 f"| 文字: {chat_label or '未知'} / 图片: {caption_label}"
             )
         else:
             logger.info(
-                f"已注入转发上下文（文字 {n_text} 段）| 解析模型: {chat_label or '未知'}"
+                f"[让我康康] 已注入转发上下文（文字 {n_text} 段）| 解析模型: {chat_label or '未知'}"
             )
-        await self._history.write_forward_pair(umo, merged_text, "")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -192,13 +290,15 @@ class let_me_check(Star):
 
         # 去重检查
         if self._check_dedup(detect_result.forward_id, umo):
-            logger.debug(f"消息已处理过，跳过: {detect_result.forward_id[:20]}")
+            logger.debug(
+                f"[让我康康] 消息已处理过，跳过: {detect_result.forward_id[:20]}"
+            )
             return
 
         # 仅暂存（不解析），等待 LLM 触发时统一解析
         self._enqueue_pending(umo, event, detect_result)
         logger.info(
-            f"检测到转发消息，已暂存 | id={detect_result.forward_id} | 来源={detect_result.source.value}"
+            f"[让我康康] 检测到转发消息，已暂存 | id={detect_result.forward_id} | 来源={detect_result.source.value}"
         )
 
     # ─── 暂存队列 ─────────────────────────────────────────────
@@ -211,7 +311,9 @@ class let_me_check(Star):
         if len(queue) > _PENDING_MAX:
             dropped = queue.pop(0)
             self._remove_dedup(dropped[1].forward_id, umo)
-            logger.debug(f"暂存队列超限，淘汰最旧条目: {dropped[1].forward_id[:20]}")
+            logger.debug(
+                f"[让我康康] 暂存队列超限，淘汰最旧条目: {dropped[1].forward_id[:20]}"
+            )
 
     def _cleanup_expired_pending(self, umo: str):
         """惰性清理过期暂存条目（TTL 24h）"""
@@ -250,6 +352,8 @@ class let_me_check(Star):
 
         单条失败/为空：跳过该条并 _remove_dedup（允许重试），继续其余。
         全部失败：返回 (None, [], None, 0)（纯转发场景已在 on_llm_request 顶部吞掉）。
+        多条合并后按总内容预算（_MAX_TOTAL_CHARS/_MAX_TOTAL_IMAGES）截断，
+        截断时在文本末尾追加固定"[内容已截断…]"标记。
 
         Args:
             umo: 统一消息来源标识
@@ -266,6 +370,9 @@ class let_me_check(Star):
         all_image_urls: list[str] = []
         any_success = False
 
+        # 同一批次的全部转发共享同一个协议拉取信号量：
+        # 否则每条 pending 各自新建 Semaphore(8)，并行时会把嵌套并发上限放大 N 倍。
+        fetch_semaphore = asyncio.Semaphore(_NESTED_FETCH_CONCURRENCY)
         tasks = [
             asyncio.wait_for(
                 extract_messages(
@@ -274,6 +381,7 @@ class let_me_check(Star):
                     max_messages=self.max_messages,
                     parse_nested=self.parse_nested_forward,
                     max_depth=self.max_nested_depth,
+                    fetch_semaphore=fetch_semaphore,
                 ),
                 timeout=_EXTRACT_TIMEOUT,
             )
@@ -287,11 +395,13 @@ class let_me_check(Star):
             # 注意：gather(return_exceptions=True) 可能返回 BaseException 子类
             # （如 CancelledError），其并非 Exception 子类，必须用 BaseException 判断
             if isinstance(result, BaseException):
-                logger.error(f"解析转发失败: {type(result).__name__}: {result}")
+                logger.error(
+                    f"[让我康康] 解析转发失败: {type(result).__name__}: {result}"
+                )
                 self._remove_dedup(detect_result.forward_id, umo)
                 continue
             if not result.messages:
-                logger.info("转发内容为空，跳过")
+                logger.info("[让我康康] 转发内容为空，跳过")
                 self._remove_dedup(detect_result.forward_id, umo)
                 continue
             any_success = True
@@ -300,6 +410,21 @@ class let_me_check(Star):
 
         if not any_success:
             return None, [], None, 0
+
+        # 总内容/图片预算：多条暂存合并后可能远超单条上限（10 条 × 200 条消息），
+        # 按入队顺序截断，防止上下文溢出、成本陡增或直通图片过多。
+        total_message_count = len(all_messages)
+        all_messages, all_image_urls, truncated = _apply_content_budget(
+            all_messages,
+            all_image_urls,
+            max_chars=_MAX_TOTAL_CHARS,
+            max_images=_MAX_TOTAL_IMAGES,
+        )
+        if truncated:
+            logger.warning(
+                "[让我康康] 转发内容超出单次处理预算，已按入队顺序截断："
+                f"保留 {len(all_messages)}/{total_message_count} 条消息"
+            )
 
         # 图片处理：
         # - level 3（当前对话模型支持图片输入）→ 图片直通，不转述，原生发给模型
@@ -328,7 +453,7 @@ class let_me_check(Star):
                         timeout=_CAPTION_TIMEOUT,
                     )
                 except Exception as e:
-                    logger.error(f"图片转述失败: {type(e).__name__}: {e}")
+                    logger.error(f"[让我康康] 图片转述失败: {type(e).__name__}: {e}")
                     image_descriptions = ["(图片)"] * len(all_image_urls)
 
         # 合并构建用户消息文本（多条转发合并为一段）
@@ -337,21 +462,33 @@ class let_me_check(Star):
         merged_text = self._llm.build_user_message_text(
             all_messages, image_descriptions, sender_name, is_group
         )
+        if truncated:
+            merged_text += (
+                f"\n\n[内容已截断：转发内容超出单次处理预算，"
+                f"仅保留前 {len(all_messages)}/{total_message_count} 条消息]"
+            )
         return merged_text, direct_image_urls, caption_label, caption_count
 
     # ─── 辅助方法 ─────────────────────────────────────────────
 
     def _is_enabled_for_chat(self, umo: str, is_group: bool) -> bool:
         """检查当前会话是否启用转发分析"""
+        chat_type = "群聊" if is_group else "私聊"
         chat_config = self.group_chat if is_group else self.private_chat
         if not chat_config.get("enable", True):
+            logger.debug(f"[让我康康] {chat_type}转发分析未启用，跳过: {umo}")
             return False
         if not chat_config.get("whitelist_enable", False):
             return True
         whitelist = chat_config.get("whitelist", [])
         if not whitelist:
             return True
-        return umo in whitelist
+        if umo in whitelist:
+            return True
+        # 白名单不匹配是"配置格式"高危点：常见错误是填群号而非完整 UMO
+        # （如 123456 而非 aiocqhttp:GroupMessage:123456），这里留痕便于排查
+        logger.debug(f"[让我康康] 会话不在白名单，跳过: {umo}（白名单: {whitelist}）")
+        return False
 
     def _check_dedup(self, forward_id: str, umo: str) -> bool:
         """检查消息是否已处理过"""
@@ -388,4 +525,4 @@ class let_me_check(Star):
         """插件终止时资源释放"""
         self._pending.clear()
         self._dedup_cache.clear()
-        logger.info("插件已停止")
+        logger.info("[让我康康] 插件已停止")

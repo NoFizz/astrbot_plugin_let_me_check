@@ -19,7 +19,7 @@
         "description": "群聊白名单（UMO列表）",
         "type": "list",
         "default": [],
-        "hint": "填写需要启用转发分析的群聊UMO，格式如 aiocqhttp:GroupMessage:123456。白名单为空时对所有群聊生效。"
+        "hint": "填写需要启用转发分析的群聊完整UMO，格式为 aiocqhttp:GroupMessage:群号（注意：只填群号不会生效）。白名单为空时对所有群聊生效。"
       }
     }
   },
@@ -43,7 +43,7 @@
         "description": "私聊白名单（UMO列表）",
         "type": "list",
         "default": [],
-        "hint": "填写需要启用转发分析的私聊UMO，格式如 aiocqhttp:FriendMessage:123456。白名单为空时对所有私聊生效。"
+        "hint": "填写需要启用转发分析的私聊完整UMO，格式为 aiocqhttp:FriendMessage:QQ号（注意：只填QQ号不会生效）。白名单为空时对所有私聊生效。"
       }
     }
   },
@@ -69,13 +69,6 @@
     "description": "模型配置",
     "type": "object",
     "items": {
-      "provider_id": {
-        "description": "指定对话模型提供商（可选）",
-        "type": "string",
-        "default": "",
-        "hint": "留空则使用当前配置文件中的“默认对话模型”。填写后使用指定的提供商。",
-        "_special": "select_provider"
-      },
       "image_caption_provider_id": {
         "description": "图片转述模型提供商（可选）",
         "type": "string",

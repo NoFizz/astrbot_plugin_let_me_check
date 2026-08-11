@@ -42,7 +42,7 @@ class LLMService:
             caption_concurrency = int(raw_concurrency)
         except (TypeError, ValueError):
             logger.warning(
-                f"image_caption_concurrency 配置值 {raw_concurrency!r} "
+                f"[让我康康] image_caption_concurrency 配置值 {raw_concurrency!r} "
                 f"无效，已回退到默认值 5"
             )
             caption_concurrency = 5
@@ -75,15 +75,18 @@ class LLMService:
         4 = 会话级配置 provider_ltm_settings.image_caption_provider_id
         0 = 全部不可用
         """
-        # 1. 插件自身配置
-        configured_id = self._model_config.get("image_caption_provider_id", "").strip()
+        # 1. 插件自身配置（类型防护：非法配置值可能不是字符串）
+        raw_configured_id = self._model_config.get("image_caption_provider_id", "")
+        configured_id = (
+            raw_configured_id.strip() if isinstance(raw_configured_id, str) else ""
+        )
         if configured_id:
             provider = self._context.get_provider_by_id(configured_id)
             if provider and isinstance(provider, Provider):
                 return provider, 1
             if provider:
                 logger.warning(
-                    f"配置的图片转述提供商 '{configured_id}' 不是对话模型类型"
+                    f"[让我康康] 配置的图片转述提供商 '{configured_id}' 不是对话模型类型"
                 )
 
         # 2. 全局默认配置（“默认图片转述模型”）
@@ -108,14 +111,18 @@ class LLMService:
                 provider = self._context.get_using_provider(umo=umo)
                 if provider and isinstance(provider, Provider):
                     if self._supports_image_input(provider):
-                        logger.debug("当前对话模型支持图片输入，图片将直通解析")
+                        logger.debug(
+                            "[让我康康] 当前对话模型支持图片输入，图片将直通解析"
+                        )
                         return provider, 3
                     logger.warning(
-                        f"当前对话模型 {_provider_label(provider)} 不支持图片输入，"
+                        f"[让我康康] 当前对话模型 {_provider_label(provider)} 不支持图片输入，"
                         "继续查找下一级"
                     )
             except Exception as e:
-                logger.warning(f"获取当前对话模型失败: {type(e).__name__}: {e}")
+                logger.warning(
+                    f"[让我康康] 获取当前对话模型失败: {type(e).__name__}: {e}"
+                )
 
         # 4. 会话级配置（“群聊上下文感知 → 群聊图片转述模型”）——最终兜底
         ltm_cfg = session_cfg.get("provider_ltm_settings", {})
@@ -126,7 +133,7 @@ class LLMService:
                 return provider, 4
 
         logger.error(
-            "未找到可用的图片转述模型：插件配置、默认图片转述模型、"
+            "[让我康康] 未找到可用的图片转述模型：插件配置、默认图片转述模型、"
             "当前对话模型（不支持图片输入）均不可用，且未配置群聊图片转述模型"
         )
         return None, 0
@@ -161,7 +168,7 @@ class LLMService:
         # URL 去重：只转述唯一 URL
         unique_urls = list(dict.fromkeys(urls))  # 保序去重
         logger.info(
-            f"正在使用图片转述模型解析 {len(unique_urls)} 张图片 | "
+            f"[让我康康] 正在使用图片转述模型解析 {len(unique_urls)} 张图片 | "
             f"模型: {_provider_label(provider)}"
         )
         sem = asyncio.Semaphore(self._caption_concurrency)
@@ -176,7 +183,7 @@ class LLMService:
                     else:
                         caption_map[url] = "(图片)"
                 except Exception as e:
-                    logger.warning(f"图片描述失败: {type(e).__name__}: {e}")
+                    logger.warning(f"[让我康康] 图片描述失败: {type(e).__name__}: {e}")
                     caption_map[url] = "(图片)"
 
         await asyncio.gather(*[_caption_one(url) for url in unique_urls])

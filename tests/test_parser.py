@@ -413,6 +413,44 @@ def test_total_forward_fetch_capped(make_event):
     asyncio.run(scenario())
 
 
+def test_top_level_forward_self_reference_fetched_once(make_event):
+    """远程顶层转发 A 的内容再次引用 A：顶层 ID 计入共享 _seen，
+    只拉取一次，内容不重复插入。"""
+
+    class SelfBot:
+        def __init__(self):
+            self.api = self
+            self.calls = []
+
+        async def call_action(self, action, **params):
+            nid = str(params.get("id", ""))
+            self.calls.append(nid)
+            # 返回的顶层内容中又嵌套引用自身 id
+            return {
+                "messages": [
+                    {
+                        "sender": {"nickname": "S"},
+                        "content": [
+                            _text_seg("顶层内容"),
+                            {"type": "forward", "data": {"id": nid}},
+                        ],
+                    }
+                ]
+            }
+
+    async def scenario():
+        bot = SelfBot()
+        event = make_event(segments=[Forward(id="top-A")])
+        event.bot = bot
+        result = await extract_messages(event, detect_forward(event))
+        # top-A 只被拉取一次（顶层占用 _seen 后，嵌套引用被去重）
+        assert bot.calls.count("top-A") == 1
+        texts = [m.content for m in result.messages]
+        assert texts.count("顶层内容") == 1
+
+    asyncio.run(scenario())
+
+
 def test_default_nested_depth_is_five(make_event):
     """extract_messages 默认 max_depth 为 5（加深嵌套解析能力）。"""
 

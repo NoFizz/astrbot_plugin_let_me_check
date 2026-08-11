@@ -32,3 +32,9 @@ def test_caption_concurrency_default_is_five():
     schema = _load_schema()
     default = schema["model_config"]["items"]["image_caption_concurrency"]["default"]
     assert default == 5
+
+
+def test_schema_has_no_removed_provider_id():
+    """P1-01 回归：model_config.provider_id 已从 schema 移除（该配置从未生效）。"""
+    schema = _load_schema()
+    assert "provider_id" not in schema["model_config"]["items"]
